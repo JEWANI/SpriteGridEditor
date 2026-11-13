@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# PyInstaller (exe는 저장소에 올리지 않고 필요하면 GitHub Releases에 첨부)
+build/
+dist/
+*.spec
+
+# Personal settings (저장 폴더·최근 파일·Body 폴더 경로가 담겨 있어 개인별로 다름)
+config.json
+
+# 실행 중 자동 생성되는 폴더
+output/
+autosave/
+
+# IDE / OS
+.vs/
+.vscode/
+*.sln
+*.pyproj
+.DS_Store
+
+# 개인 개발 기록 (저장소에 올리지 않음)
+*개발일지*.md
+
+# 편집 백업 · 테스트 임시 파일
+*_backup.png
+.pytest_cache/
+*.log
+
+# 가상환경 / 기타 IDE
+.venv/
+venv/
+.idea/
+Thumbs.db
+desktop.ini
