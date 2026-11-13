@@ -8,13 +8,14 @@ about_dialog.py
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
 from app_info import (
     APP_NAME, APP_VERSION, APP_VERSION_NAME, APP_VERSION_NAME_EN, AUTHOR, AUTHOR_BLOG_URL,
     DOC_ID, DOC_VERSION, GITHUB_URL,
 )
+from config_manager import resource_path
 from i18n import current_language, tr
 
 
@@ -28,6 +29,13 @@ class AboutDialog(QDialog):
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
+
+        icon_label = QLabel()
+        icon_label.setAlignment(Qt.AlignCenter)
+        pm = QIcon(resource_path("icon.ico")).pixmap(96, 96)
+        if not pm.isNull():
+            icon_label.setPixmap(pm)
+            layout.addWidget(icon_label)
 
         name_label = QLabel(APP_NAME)
         name_font = name_label.font()

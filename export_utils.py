@@ -127,6 +127,28 @@ def save_png_rgba(arr: np.ndarray, path: str) -> str | None:
             os.remove(tmp_path)
 
 
+def save_png_l(values: np.ndarray, path: str) -> str | None:
+    """8비트 그레이스케일(1채널, 모드 L) PNG 저장 — 인덱스 마스크 `_M.png` 용 (§4.4).
+
+    Unity `OutfitMaskImporter`가 R8로 읽는다. sRGB·감마 메타데이터 없음. 백업·임시 파일 교체는 RGBA와 같다.
+    """
+    folder = os.path.dirname(os.path.abspath(path))
+    os.makedirs(folder, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(suffix=".png", dir=folder)
+    os.close(fd)
+    try:
+        Image.fromarray(np.ascontiguousarray(values, dtype=np.uint8), "L").save(tmp_path, format="PNG")
+        backup = None
+        if os.path.exists(path):
+            backup = backup_path_for(path)
+            shutil.copy2(path, backup)
+        os.replace(tmp_path, path)
+        return backup
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
 def load_png_rgba(path: str) -> np.ndarray:
     with Image.open(path) as im:
         return np.array(im.convert("RGBA"), dtype=np.uint8)

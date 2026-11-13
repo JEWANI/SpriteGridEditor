@@ -11,39 +11,52 @@ main_window.py
 
 from __future__ import annotations
 
+import html
 import os
 import time
 from dataclasses import dataclass
 
 import numpy as np
+from PIL import Image
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction, QActionGroup, QImage, QKeySequence, QPixmap
+from PySide6.QtGui import QAction, QActionGroup, QColor, QImage, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QMainWindow,
-    QMenu, QMessageBox, QPushButton, QSizePolicy, QSlider, QSpinBox, QSplitter, QStatusBar,
+    QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QListWidget,
+    QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox, QSplitter, QStatusBar,
     QToolBar, QToolButton, QVBoxLayout, QWidget,
 )
 
 import cell_ops
 import export_utils
+import import_utils
+import mask_convert as mc
 import reference_layers
 from about_dialog import AboutDialog
 from app_info import APP_NAME, APP_VERSION
 from autosave import AutoSaver, Snapshot
 from canvas_widget import (
-    BACKGROUND_MODES, BG_BODY, BG_CHECKER, ZOOM_STEPS, CanvasWidget,
+    BACKGROUND_MODES, BG_CHECKER, ZOOM_STEPS, CanvasWidget,
 )
 from config_manager import ConfigManager
+from layer_model import (
+    KIND_BODY, KIND_EXTRA, MAX_EXTRA_LAYERS, MAX_REFERENCE_LAYERS, RefLayer, can_add_extra,
+)
 from help_dialog import KIND_CHANGELOG, KIND_HELP, HelpDialog
+from color_widgets import FourColorEdit, colors_from_config, colors_to_config
+from compare_dialog import DEFAULT_SLOTS, CompareDialog
+from convert_dialog import ConvertDialog
+from history import Edit, make_edit
 from i18n import Translatable, set_language, tr
+from import_dialog import ImportDialog
+from stats_dialog import StatsDialog
 from preset_dialog import SheetSpecDialog, grid_text, preset_list_label
 from save_dialog import SaveDialog
 from settings_dialog import SettingsDialog
 from sheet_model import (
     GENDER_COMMON, GENDER_FEMALE, GENDER_MALE, CellRect, GridSpec, SheetModel, all_presets,
-    detect_gender, make_user_preset, pick_preset_for_file, preset_spec, rect_label,
+    detect_gender, find_matching_presets, make_user_preset, pick_preset_for_file, preset_spec, rect_label,
 )
-from theme import get_stylesheet
+from theme import canvas_colors, get_stylesheet
 from ui_utils import open_folder
 
 IMAGE_FILTER_KEY = "dlg.open.filter"
@@ -59,6 +72,12 @@ class ClipboardData:
     cell_w: int
     cell_h: int
     gender: str
+    mask: np.ndarray | None = None  # 마스크가 있는 시트에서 복사했으면 같은 영역의 인덱스 마스크
+
+
+MASK_VIEW_OFF, MASK_VIEW_OVERLAY, MASK_VIEW_ONLY = "off", "overlay", "only"
+MASK_VIEW_MODES = (MASK_VIEW_OFF, MASK_VIEW_OVERLAY, MASK_VIEW_ONLY)
+DEFAULT_PREVIEW_COLORS = [mc.parse_hex(h) for h in DEFAULT_SLOTS[3]["colors"]]  # 네이비 (색 차이가 잘 보임)
 
 
 class MainWindow(QMainWindow, Translatable):
@@ -72,6 +91,17 @@ class MainWindow(QMainWindow, Translatable):
         self.body_override: str = ""  # 직접 지정한 Base Body PNG
         self._body_cache: dict[tuple[str, float], QImage] = {}
         self._body_qimage: QImage | None = None
+        # 구버전 설정 이전: 배경 "Base Body 오버레이" → Body 레이어 표시로
+        if self.config.get("background_mode", BG_CHECKER) == "body":
+            self.config.set("background_mode", BG_CHECKER)
+            self.config.set("body_visible", True)
+        self.body_layer = RefLayer(
+            name="", kind=KIND_BODY, visible=bool(self.config.get("body_visible", False)),
+            opacity=int(self.config.get("body_opacity", 60)),
+            above=bool(self.config.get("body_above", False)), uid=0)
+        self.body_layer.clamp()
+        self.extra_layers: list[RefLayer] = []
+        self._layer_uid = 0
         self._last_msg = ("status.ready", {}, "info")
         self._last_autosave_marker = None
 
@@ -148,9 +178,30 @@ class MainWindow(QMainWindow, Translatable):
             self.bg_group.addAction(act)
             self.bg_actions[mode] = act
 
+        self.a_toggle_body = a("act.toggle_body", self._toggle_body, "Shift+B")
+        self.a_toggle_edit = a("act.toggle_edit", self._toggle_edit_visible, "Shift+E")
+        self.a_add_ref = a("act.add_ref", self._add_reference_dialog, "Ctrl+Shift+R")
         self.a_open_save_dir = a("act.open_save_dir", self._open_save_dir)
         self.a_pick_body = a("act.pick_body", self._pick_body)
         self.a_spec_custom = a("act.spec_custom", self._custom_spec_dialog)
+        self.a_import_adjust = a("act.import_adjust", self.adjust_current_image, "Ctrl+Shift+I")
+        # 2단계: 회색+마스크 / Nudge / 미리보기·비교·통계
+        self.a_convert = a("act.convert", self.convert_to_gray_mask, "Ctrl+Shift+G")
+        self.a_remove_mask = a("act.remove_mask", self.remove_mask)
+        self.a_compare = a("act.compare", self.open_compare, "Ctrl+Shift+P")
+        self.a_stats = a("act.stats", self.open_stats, "Ctrl+Shift+T")
+        self.a_mask_view = a("act.mask_view_cycle", self._cycle_mask_view, "Alt+M")
+        self.a_missing = a("act.mask_missing", self._toggle_missing, checkable=True)
+        self.a_tint_view = a("act.tint_view", self._toggle_tint_view, "Alt+T", checkable=True)
+        self.nudge_actions: list[QAction] = []
+        for key, dx, dy, sc in (("act.nudge_left", -1, 0, "Alt+Left"), ("act.nudge_right", 1, 0, "Alt+Right"),
+                                ("act.nudge_up", 0, -1, "Alt+Up"), ("act.nudge_down", 0, 1, "Alt+Down")):
+            self.nudge_actions.append(a(key, lambda dx=dx, dy=dy: self.nudge(dx, dy), sc))
+        for key, dx, dy, sc in (("act.nudge_left5", -5, 0, "Alt+Shift+Left"),
+                                ("act.nudge_right5", 5, 0, "Alt+Shift+Right"),
+                                ("act.nudge_up5", 0, -5, "Alt+Shift+Up"),
+                                ("act.nudge_down5", 0, 5, "Alt+Shift+Down")):
+            self.nudge_actions.append(a(key, lambda dx=dx, dy=dy: self.nudge(dx, dy), sc))
         self.a_settings = a("act.settings", self.open_settings, "Ctrl+,")
         self.a_help = a("act.help", lambda: self._show_help(KIND_HELP), "F1")
         self.a_changelog = a("act.changelog", lambda: self._show_help(KIND_CHANGELOG))
@@ -175,6 +226,13 @@ class MainWindow(QMainWindow, Translatable):
         for act in (self.a_undo, self.a_redo, None, self.a_copy, self.a_cut, self.a_paste,
                     self.a_paste_mirror, self.a_paste_flipv, self.a_mirror_apply, None, self.a_clear):
             self.m_edit.addSeparator() if act is None else self.m_edit.addAction(act)
+        self.m_edit.addSeparator()
+        self.m_nudge = self.m_edit.addMenu("")
+        self._t(self.m_nudge.setTitle, "menu.nudge")
+        for i, act in enumerate(self.nudge_actions):
+            if i == 4:
+                self.m_nudge.addSeparator()
+            self.m_nudge.addAction(act)
 
         self.m_view = mb.addMenu("")
         self._t(self.m_view.setTitle, "menu.view")
@@ -182,15 +240,26 @@ class MainWindow(QMainWindow, Translatable):
         self.m_view.addAction(self.a_zoom_in)
         self.m_view.addAction(self.a_zoom_out)
         self.m_view.addSeparator()
+        self.m_view.addAction(self.a_toggle_body)
+        self.m_view.addAction(self.a_toggle_edit)
+        self.m_view.addAction(self.a_add_ref)
+        self.m_view.addSeparator()
         self.m_bg = self.m_view.addMenu("")
         self._t(self.m_bg.setTitle, "act.bg_menu")
         for mode in BACKGROUND_MODES:
             self.m_bg.addAction(self.bg_actions[mode])
         self.m_bg.addSeparator()
         self.m_bg.addAction(self.a_bg_cycle)
+        self.m_view.addSeparator()
+        for act in (self.a_mask_view, self.a_missing, self.a_tint_view, None, self.a_compare, self.a_stats):
+            self.m_view.addSeparator() if act is None else self.m_view.addAction(act)
 
         self.m_tools = mb.addMenu("")
         self._t(self.m_tools.setTitle, "menu.tools")
+        self.m_tools.addAction(self.a_import_adjust)
+        self.m_tools.addAction(self.a_convert)
+        self.m_tools.addAction(self.a_remove_mask)
+        self.m_tools.addSeparator()
         self.m_tools.addAction(self.a_spec_custom)
         self.m_tools.addAction(self.a_pick_body)
         self.m_tools.addAction(self.a_open_save_dir)
@@ -269,13 +338,29 @@ class MainWindow(QMainWindow, Translatable):
         self.cb_zoom.setCurrentIndex(max(0, self.cb_zoom.findData(self.canvas.zoom())))
 
         splitter = QSplitter(Qt.Horizontal)
-        splitter.addWidget(self._build_left_panel())
-        splitter.addWidget(self.canvas)
+        left_scroll = QScrollArea()  # 2단계 패널이 늘어 작은 화면에서도 잘리지 않게 스크롤
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        left_scroll.setFrameShape(QScrollArea.NoFrame)
+        left_scroll.setWidget(self._build_left_panel())
+        left_scroll.setMinimumWidth(250)
+        splitter.addWidget(left_scroll)
+        self.lb_layerbar = QLabel()
+        self.lb_layerbar.setObjectName("LayerBar")
+        self.lb_layerbar.setTextFormat(Qt.RichText)
+        self.lb_layerbar.setWordWrap(True)
+        center = QWidget()
+        clay = QVBoxLayout(center)
+        clay.setContentsMargins(0, 0, 0, 0)
+        clay.setSpacing(0)
+        clay.addWidget(self.lb_layerbar)
+        clay.addWidget(self.canvas, stretch=1)
+        splitter.addWidget(center)
         splitter.addWidget(self._build_right_panel())
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setStretchFactor(2, 0)
-        splitter.setSizes([200, 1000, 250])
+        splitter.setSizes([260, 980, 250])
         splitter.setCollapsible(1, False)
         self.setCentralWidget(splitter)
 
@@ -288,7 +373,7 @@ class MainWindow(QMainWindow, Translatable):
 
     def _build_left_panel(self) -> QWidget:
         panel = QWidget()
-        panel.setMinimumWidth(180)
+        panel.setMinimumWidth(230)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(6, 6, 6, 6)
 
@@ -341,9 +426,72 @@ class MainWindow(QMainWindow, Translatable):
         btn_open.clicked.connect(self._open_save_dir)
         lay.addWidget(btn_open)
         layout.addWidget(gb_export)
+        layout.addWidget(self._build_outfit_group())
 
         layout.addStretch(1)
         return panel
+
+    def _build_outfit_group(self) -> QGroupBox:
+        """옷 색 · 마스크 (2단계): 변환 / 마스크 보기 / 색 미리보기 / 비교·통계."""
+        gb, lay = self._group("panel.outfit")
+        self.lb_mask_state = QLabel()
+        self.lb_mask_state.setWordWrap(True)
+        self.lb_mask_state.setObjectName("DimLabel")
+        lay.addWidget(self.lb_mask_state)
+        btn_conv = QToolButton()
+        btn_conv.setDefaultAction(self.a_convert)
+        btn_conv.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        btn_conv.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        lay.addWidget(btn_conv)
+
+        row = QHBoxLayout()
+        lb = QLabel()
+        self._t(lb.setText, "panel.mask_view")
+        row.addWidget(lb)
+        self.cb_mask_view = QComboBox()
+        self.cb_mask_view.activated.connect(self._on_mask_view_activated)
+        row.addWidget(self.cb_mask_view, 1)
+        lay.addLayout(row)
+        self.sl_mask_opacity = QSlider(Qt.Horizontal)
+        self.sl_mask_opacity.setRange(10, 100)
+        self.sl_mask_opacity.setValue(int(self.config.get("mask_view.opacity", 60)))
+        self.sl_mask_opacity.valueChanged.connect(self._on_mask_opacity)
+        lay.addWidget(self.sl_mask_opacity)
+        self.cb_missing = QCheckBox()
+        self._t(self.cb_missing.setText, "act.mask_missing")
+        self.cb_missing.toggled.connect(self.a_missing.setChecked)
+        self.a_missing.toggled.connect(self.cb_missing.setChecked)
+        lay.addWidget(self.cb_missing)
+
+        self.cb_tint = QCheckBox()
+        self._t(self.cb_tint.setText, "act.tint_view")
+        self.cb_tint.toggled.connect(self.a_tint_view.setChecked)
+        self.a_tint_view.toggled.connect(self.cb_tint.setChecked)
+        lay.addWidget(self.cb_tint)
+        self.preview_colors = FourColorEdit(colors_from_config(
+            self.config.get("outfit_preview.colors"), DEFAULT_PREVIEW_COLORS))
+        self.preview_colors.colorsChanged.connect(self._on_preview_colors)
+        lay.addWidget(self.preview_colors)
+        grow = QHBoxLayout()
+        lb_gain = QLabel()
+        self._t(lb_gain.setText, "panel.gain")
+        self._t(lb_gain.setToolTip, "panel.gain_tip")
+        grow.addWidget(lb_gain)
+        self.sp_gain = QDoubleSpinBox()
+        self.sp_gain.setRange(0.5, 2.0)
+        self.sp_gain.setSingleStep(0.01)
+        self.sp_gain.setDecimals(2)
+        self.sp_gain.setValue(float(self.config.get("outfit_preview.gain", 1.0)))
+        self.sp_gain.valueChanged.connect(self._on_gain)
+        grow.addWidget(self.sp_gain, 1)
+        lay.addLayout(grow)
+        for act in (self.a_compare, self.a_stats):
+            b = QToolButton()
+            b.setDefaultAction(act)
+            b.setToolButtonStyle(Qt.ToolButtonTextOnly)
+            b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            lay.addWidget(b)
+        return gb
 
     def _build_right_panel(self) -> QWidget:
         panel = QWidget()
@@ -351,23 +499,12 @@ class MainWindow(QMainWindow, Translatable):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(6, 6, 6, 6)
 
+        layout.addWidget(self._build_layers_group())
+
         gb, lay = self._group("panel.background")
         self.cb_bg = QComboBox()
         self.cb_bg.activated.connect(self._on_bg_activated)
         lay.addWidget(self.cb_bg)
-
-        self.lb_opacity = QLabel()
-        self._t(self.lb_opacity.setText, "panel.opacity")
-        lay.addWidget(self.lb_opacity)
-        row = QHBoxLayout()
-        self.sl_opacity = QSlider(Qt.Horizontal)
-        self.sl_opacity.setRange(0, 100)
-        self.sl_opacity.setValue(int(self.config.get("body_opacity", 60)))
-        self.sl_opacity.valueChanged.connect(self._on_opacity_changed)
-        self.lb_opacity_val = QLabel(f"{self.sl_opacity.value()}%")
-        row.addWidget(self.sl_opacity, stretch=1)
-        row.addWidget(self.lb_opacity_val)
-        lay.addLayout(row)
 
         self.cb_show_grid = QCheckBox()
         self._t(self.cb_show_grid.setText, "act.grid")
@@ -397,7 +534,7 @@ class MainWindow(QMainWindow, Translatable):
         lay2.addLayout(btn_row)
         self.lb_body_thumb = QLabel()
         self.lb_body_thumb.setAlignment(Qt.AlignCenter)
-        self.lb_body_thumb.setMinimumHeight(170)
+        self.lb_body_thumb.setMinimumHeight(110)
         self.lb_body_thumb.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         lay2.addWidget(self.lb_body_thumb, stretch=1)
         layout.addWidget(gb2, stretch=1)
@@ -430,11 +567,14 @@ class MainWindow(QMainWindow, Translatable):
         self._fill_bg_combo()
         self._fill_preset_combo()
         self._fill_save_dir_combo()
+        self._fill_mask_view_combo()
         self._sync_panel_from_config()
         self._refresh_body()
         self._update_all()
 
     def _update_all(self) -> None:
+        self._rebuild_layer_list()
+        self._update_layer_bar()
         self._update_title()
         self._update_actions()
         self._update_selection_status()
@@ -477,6 +617,22 @@ class MainWindow(QMainWindow, Translatable):
         for act in (self.a_paste, self.a_paste_mirror, self.a_paste_flipv):
             act.setEnabled(has and has_clip)
         self.a_spec_custom.setEnabled(has)
+        self.a_import_adjust.setEnabled(has)
+        has_mask = bool(has and m.has_mask)
+        self.a_convert.setEnabled(has)
+        for act in (self.a_remove_mask, self.a_compare, self.a_stats, self.a_mask_view, self.a_missing,
+                    self.a_tint_view):
+            act.setEnabled(has_mask)
+        self.cb_mask_view.setEnabled(has_mask)
+        self.sl_mask_opacity.setEnabled(has_mask)
+        for act in self.nudge_actions:
+            act.setEnabled(has_src)
+        if not has:
+            self.lb_mask_state.setText("")
+        elif has_mask:
+            self.lb_mask_state.setText(tr("panel.mask_on", name=mc.mask_path_for(m.display_name) if m.name else "_M"))
+        else:
+            self.lb_mask_state.setText(tr("panel.mask_off"))
         self.cb_preset.setEnabled(has)
         self.cb_gender.setEnabled(has)
         self.cb_skin.setEnabled(has)
@@ -538,8 +694,6 @@ class MainWindow(QMainWindow, Translatable):
             self.cb_bg.addItem(tr(f"bg.{mode}"), userData=mode)
         self.cb_bg.setCurrentIndex(max(0, self.cb_bg.findData(cur)))
         self.bg_actions[cur].setChecked(True)
-        self.sl_opacity.setEnabled(cur == BG_BODY)
-        self.lb_opacity.setEnabled(cur == BG_BODY)
 
     def _fill_preset_combo(self) -> None:
         presets = all_presets(self.config.get("sheet_presets", []))
@@ -587,6 +741,8 @@ class MainWindow(QMainWindow, Translatable):
         if app is not None:
             app.setStyleSheet(get_stylesheet(theme))
         self.canvas.set_theme(theme)
+        if hasattr(self, "list_layers"):
+            self._rebuild_layer_list()
 
     def _apply_view_settings(self) -> None:
         self.canvas.set_grid_style(self.config.get("grid.color", "#00e5ff"),
@@ -594,7 +750,7 @@ class MainWindow(QMainWindow, Translatable):
         self.canvas.set_show_grid(self.a_grid.isChecked())
         mode = self.config.get("background_mode", BG_CHECKER)
         self.canvas.set_background(mode if mode in BACKGROUND_MODES else BG_CHECKER)
-        self.canvas.set_body_opacity(self.sl_opacity.value())
+        self.canvas.set_reference_tint(bool(self.config.get("reference_tint", True)))
 
     def _on_grid_toggled(self, checked: bool) -> None:
         self.canvas.set_show_grid(checked)
@@ -604,8 +760,6 @@ class MainWindow(QMainWindow, Translatable):
         self.canvas.set_background(mode)
         self.config.set("background_mode", mode)
         self._fill_bg_combo()
-        if mode == BG_BODY and self._body_qimage is None:
-            self._show_message("status.body_hint_pick", {}, "warn")
 
     def _cycle_background(self) -> None:
         modes = list(BACKGROUND_MODES)
@@ -614,11 +768,6 @@ class MainWindow(QMainWindow, Translatable):
 
     def _on_bg_activated(self, _i: int) -> None:
         self._set_background(self.cb_bg.currentData())
-
-    def _on_opacity_changed(self, value: int) -> None:
-        self.lb_opacity_val.setText(f"{value}%")
-        self.canvas.set_body_opacity(value)
-        self.config.set("body_opacity", int(value))
 
     def _on_zoom_activated(self, _i: int) -> None:
         self.canvas.set_zoom(self.cb_zoom.currentData())
@@ -719,6 +868,270 @@ class MainWindow(QMainWindow, Translatable):
         self._refresh_body()
 
     # ================================================================== #
+    #  레이어: 편집 레이어(저장 대상) vs 참조 레이어(읽기 전용)               #
+    # ================================================================== #
+    def _build_layers_group(self) -> QGroupBox:
+        gb, lay = self._group("panel.layers")
+        self.lb_layer_count = QLabel()
+        self.lb_layer_count.setObjectName("DimLabel")
+        self.lb_layer_count.setWordWrap(True)
+        lay.addWidget(self.lb_layer_count)
+
+        self.list_layers = QListWidget()
+        self.list_layers.setMinimumHeight(150)
+        self.list_layers.itemChanged.connect(self._on_layer_item_changed)
+        self.list_layers.currentRowChanged.connect(self._on_layer_selected)
+        lay.addWidget(self.list_layers)
+
+        self.lb_layer_opacity = QLabel()
+        self._t(self.lb_layer_opacity.setText, "layer.opacity")
+        lay.addWidget(self.lb_layer_opacity)
+        row = QHBoxLayout()
+        self.sl_layer_opacity = QSlider(Qt.Horizontal)
+        self.sl_layer_opacity.setRange(0, 100)
+        self.sl_layer_opacity.valueChanged.connect(self._on_layer_opacity)
+        self.lb_layer_opacity_val = QLabel("0%")
+        row.addWidget(self.sl_layer_opacity, stretch=1)
+        row.addWidget(self.lb_layer_opacity_val)
+        lay.addLayout(row)
+
+        self.cb_layer_pos = QComboBox()
+        self.cb_layer_pos.activated.connect(self._on_layer_pos)
+        lay.addWidget(self.cb_layer_pos)
+
+        brow = QHBoxLayout()
+        self.btn_layer_add = QPushButton()
+        self._t(self.btn_layer_add.setText, "layer.add")
+        self.btn_layer_add.clicked.connect(self._add_reference_dialog)
+        self.btn_layer_remove = QPushButton()
+        self._t(self.btn_layer_remove.setText, "layer.remove")
+        self.btn_layer_remove.clicked.connect(self._remove_selected_layer)
+        brow.addWidget(self.btn_layer_add)
+        brow.addWidget(self.btn_layer_remove)
+        lay.addLayout(brow)
+
+        self.cb_ref_tint = QCheckBox()
+        self._t(self.cb_ref_tint.setText, "layer.tint")
+        self.cb_ref_tint.setChecked(bool(self.config.get("reference_tint", True)))
+        self.cb_ref_tint.toggled.connect(self._on_ref_tint)
+        lay.addWidget(self.cb_ref_tint)
+
+        hint = QLabel()
+        hint.setWordWrap(True)
+        hint.setObjectName("DimLabel")
+        self._t(hint.setText, "layer.hint", max=MAX_REFERENCE_LAYERS)
+        lay.addWidget(hint)
+        return gb
+
+    def _all_refs(self) -> list[RefLayer]:
+        refs = [self.body_layer] if self.body_layer.image is not None else []
+        return refs + self.extra_layers
+
+    def _push_layers(self) -> None:
+        """레이어 상태를 캔버스·목록·레이어 바에 반영."""
+        self.canvas.set_refs(self._all_refs())
+        self._rebuild_layer_list()
+        self._update_layer_bar()
+
+    def _layer_by_uid(self, uid) -> RefLayer | None:
+        if uid == 0:
+            return self.body_layer
+        return next((r for r in self.extra_layers if r.uid == uid), None)
+
+    def _rebuild_layer_list(self, select=None) -> None:
+        keep = select if select is not None else self._selected_layer_key()
+        lst = self.list_layers
+        lst.blockSignals(True)
+        lst.clear()
+        refs = [self.body_layer] + self.extra_layers
+        above = [r for r in refs if r.above and (r.image is not None)]
+        below = [r for r in refs if not r.above]
+        order: list = [("ref", r) for r in reversed(above)] + [("edit", None)] + \
+                     [("ref", r) for r in reversed(below)]
+        accent = QColor(canvas_colors(self.config.get("app_theme", "dark"))["edit_outline"])
+        for kind, r in order:
+            it = QListWidgetItem()
+            if kind == "edit":
+                m = self.model
+                name = m.display_name if m else tr("layer.no_sheet")
+                it.setText(tr("layer.row_edit", name=name))
+                f = it.font()
+                f.setBold(True)
+                it.setFont(f)
+                bg = QColor(accent)
+                bg.setAlpha(60)
+                it.setBackground(bg)
+                it.setData(Qt.UserRole, "edit")
+                it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
+                it.setCheckState(Qt.Checked if self.canvas.edit_visible() else Qt.Unchecked)
+            else:
+                pos = tr("layer.pos_above") if r.above else tr("layer.pos_below")
+                name = r.name if r.image is not None else tr("panel.body_none")
+                it.setText(tr("layer.row_ref", pos=pos, name=name))
+                it.setData(Qt.UserRole, r.uid)
+                if r.image is None:
+                    it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                else:
+                    it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
+                    it.setCheckState(Qt.Checked if r.visible else Qt.Unchecked)
+            lst.addItem(it)
+            if keep is not None and it.data(Qt.UserRole) == keep:
+                lst.setCurrentItem(it)
+        if lst.currentRow() < 0:
+            for i in range(lst.count()):
+                if lst.item(i).data(Qt.UserRole) == "edit":
+                    lst.setCurrentRow(i)
+        lst.blockSignals(False)
+        n_extra = len(self.extra_layers)
+        n_ref = n_extra + (1 if self.body_layer.image is not None else 0)
+        self.lb_layer_count.setText(tr("layer.count", n=n_ref, max=MAX_REFERENCE_LAYERS,
+                                       extra=n_extra, extra_max=MAX_EXTRA_LAYERS))
+        self.btn_layer_add.setEnabled(can_add_extra(n_extra))
+        self._sync_layer_controls()
+
+    def _selected_layer_key(self):
+        it = self.list_layers.currentItem() if hasattr(self, "list_layers") else None
+        return it.data(Qt.UserRole) if it is not None else None
+
+    def _sync_layer_controls(self) -> None:
+        key = self._selected_layer_key()
+        layer = self._layer_by_uid(key) if key not in (None, "edit") else None
+        is_ref = layer is not None and layer.image is not None
+        self.sl_layer_opacity.blockSignals(True)
+        self.sl_layer_opacity.setValue(layer.opacity if is_ref else 100)
+        self.sl_layer_opacity.blockSignals(False)
+        self.lb_layer_opacity_val.setText(f"{self.sl_layer_opacity.value()}%")
+        for w in (self.sl_layer_opacity, self.lb_layer_opacity, self.lb_layer_opacity_val,
+                  self.cb_layer_pos):
+            w.setEnabled(is_ref)
+        self.cb_layer_pos.blockSignals(True)
+        self.cb_layer_pos.clear()
+        self.cb_layer_pos.addItem(tr("layer.pos_above_full"), userData=True)
+        self.cb_layer_pos.addItem(tr("layer.pos_below_full"), userData=False)
+        self.cb_layer_pos.setCurrentIndex(0 if (layer is not None and layer.above) else 1)
+        self.cb_layer_pos.blockSignals(False)
+        self.btn_layer_remove.setEnabled(layer is not None and layer.kind == KIND_EXTRA)
+
+    def _on_layer_selected(self, _row: int) -> None:
+        self._sync_layer_controls()
+
+    def _on_layer_item_changed(self, item: QListWidgetItem) -> None:
+        key = item.data(Qt.UserRole)
+        on = item.checkState() == Qt.Checked
+        if key == "edit":
+            self.canvas.set_edit_visible(on)
+        else:
+            layer = self._layer_by_uid(key)
+            if layer is None:
+                return
+            layer.visible = on
+            if layer.kind == KIND_BODY:
+                self.config.set("body_visible", bool(on))
+            self.canvas.set_refs(self._all_refs())
+        self._update_layer_bar()
+
+    def _on_layer_opacity(self, value: int) -> None:
+        self.lb_layer_opacity_val.setText(f"{value}%")
+        key = self._selected_layer_key()
+        layer = self._layer_by_uid(key) if key not in (None, "edit") else None
+        if layer is None:
+            return
+        layer.opacity = int(value)
+        if layer.kind == KIND_BODY:
+            self.config.set("body_opacity", int(value))
+        self.canvas.set_refs(self._all_refs())
+
+    def _on_layer_pos(self, _i: int) -> None:
+        key = self._selected_layer_key()
+        layer = self._layer_by_uid(key) if key not in (None, "edit") else None
+        if layer is None:
+            return
+        layer.above = bool(self.cb_layer_pos.currentData())
+        if layer.kind == KIND_BODY:
+            self.config.set("body_above", layer.above)
+        self.canvas.set_refs(self._all_refs())
+        self._rebuild_layer_list(select=key)
+
+    def _on_ref_tint(self, on: bool) -> None:
+        self.config.set("reference_tint", bool(on))
+        self.canvas.set_reference_tint(bool(on))
+
+    def _toggle_body(self) -> None:
+        if self.body_layer.image is None:
+            self._show_message("status.body_hint_pick", {}, "warn")
+            return
+        self.body_layer.visible = not self.body_layer.visible
+        self.config.set("body_visible", bool(self.body_layer.visible))
+        self._push_layers()
+
+    def _toggle_edit_visible(self) -> None:
+        self.canvas.set_edit_visible(not self.canvas.edit_visible())
+        self._rebuild_layer_list()
+        self._update_layer_bar()
+
+    def _add_reference_dialog(self) -> None:
+        if not can_add_extra(len(self.extra_layers)):
+            self._show_message("status.layer_limit", {"max": MAX_REFERENCE_LAYERS}, "warn")
+            return
+        start = self.config.get("last_open_dir", "") or os.path.expanduser("~")
+        paths, _ = QFileDialog.getOpenFileNames(self, tr("layer.add_title"), start, "PNG (*.png)")
+        for path in paths:
+            self.add_reference_layer(path)
+
+    def add_reference_layer(self, path: str) -> bool:
+        """PNG를 참조 레이어로 추가. 한도(Body 포함 6개)를 넘으면 False."""
+        if not can_add_extra(len(self.extra_layers)):
+            self._show_message("status.layer_limit", {"max": MAX_REFERENCE_LAYERS}, "warn")
+            return False
+        try:
+            arr = export_utils.load_png_rgba(path)
+        except Exception:
+            self._show_message("status.body_load_failed", {"name": os.path.basename(path)}, "error")
+            return False
+        h, w = arr.shape[:2]
+        img = QImage(arr.data, w, h, w * 4, QImage.Format_RGBA8888).copy()
+        self._layer_uid += 1
+        layer = RefLayer(name=os.path.basename(path), image=img, kind=KIND_EXTRA, path=path,
+                         visible=True, opacity=50, above=True, uid=self._layer_uid)
+        self.extra_layers.append(layer)
+        self._push_layers()
+        self._rebuild_layer_list(select=layer.uid)
+        m = self.model
+        if m is not None and (w, h) != (m.width, m.height):
+            self._show_message("status.body_size_mismatch", {"bw": w, "bh": h, "w": m.width, "h": m.height}, "warn")
+        else:
+            self._show_message("status.layer_added", {"name": layer.name, "n": len(self._all_refs()),
+                                                      "max": MAX_REFERENCE_LAYERS}, "info")
+        return True
+
+    def _remove_selected_layer(self) -> None:
+        key = self._selected_layer_key()
+        layer = self._layer_by_uid(key) if key not in (None, "edit") else None
+        if layer is None or layer.kind != KIND_EXTRA:
+            return
+        self.extra_layers.remove(layer)
+        self._push_layers()
+
+    def _update_layer_bar(self) -> None:
+        """캔버스 위 한 줄: 지금 편집·저장되는 레이어와, 참조(읽기 전용)로 겹친 레이어를 구분해서 보여 준다."""
+        if not hasattr(self, "lb_layerbar"):
+            return
+        m = self.model
+        if m is None:
+            self.lb_layerbar.setText(html.escape(tr("layerbar.empty")))
+            return
+        edit = tr("layerbar.edit", name=f"<b>{html.escape(m.display_name)}</b>")
+        if not self.canvas.edit_visible():
+            edit += " " + tr("layerbar.edit_hidden")
+        refs = [r for r in self._all_refs() if r.visible and r.opacity > 0]
+        if refs:
+            names = ", ".join(html.escape(r.name) for r in refs)
+            ref = tr("layerbar.ref", names=names)
+        else:
+            ref = tr("layerbar.ref_none")
+        self.lb_layerbar.setText(f"{edit}<br>{ref}")
+
+    # ================================================================== #
     #  Base Body 참조 이미지 (§4.1)                                        #
     # ================================================================== #
     def _load_body_qimage(self, path: str) -> QImage | None:
@@ -770,7 +1183,9 @@ class MainWindow(QMainWindow, Translatable):
                     warn_text = tr("status.body_load_failed", name=os.path.basename(path))
         self.lb_body_name.setText(name_text)
         self.lb_body_warn.setText(warn_text)
-        self.canvas.set_body_image(self._body_qimage)
+        self.body_layer.image = self._body_qimage
+        self.body_layer.name = name_text
+        self._push_layers()
         if self._body_qimage is not None:
             pm = QPixmap.fromImage(self._body_qimage)
             size = self.lb_body_thumb.size()
@@ -822,6 +1237,23 @@ class MainWindow(QMainWindow, Translatable):
         if paths:
             self.open_file(paths[0])
 
+    def _needs_import_dialog(self, arr: np.ndarray, presets: list[dict]) -> bool:
+        """크기가 규격과 맞고 투명 배경이 있으면 바로 연다 (설정에서 끄면 항상 팝업)."""
+        if not self.config.get("import.skip_when_ready", True):
+            return True
+        h, w = arr.shape[:2]
+        ready = bool(find_matching_presets(presets, w, h)) and import_utils.has_transparency(arr)
+        return not ready
+
+    def _run_import_dialog(self, arr: np.ndarray, name: str, presets: list[dict]):
+        """가져오기 팝업. 반환: (배열, 규격 dict|None, 처리했는지) / 취소하면 None."""
+        dlg = ImportDialog(self, arr, name, presets, self.config)
+        if not dlg.exec():
+            return None
+        if dlg.open_raw or dlg.result_arr is None:
+            return arr, None, False
+        return dlg.result_arr, dlg.result_preset, True
+
     def open_file(self, path: str) -> bool:
         if not self._confirm_discard():
             return False
@@ -832,10 +1264,17 @@ class MainWindow(QMainWindow, Translatable):
             self.config.remove_recent("recent_files", path)
             return False
 
-        h, w = arr.shape[:2]
         stem = os.path.splitext(os.path.basename(path))[0]
         presets = all_presets(self.config.get("sheet_presets", []))
-        preset = pick_preset_for_file(presets, w, h, stem)
+        chosen, processed = None, False
+        if self._needs_import_dialog(arr, presets):
+            res = self._run_import_dialog(arr, os.path.basename(path), presets)
+            if res is None:
+                return False
+            arr, chosen, processed = res
+
+        h, w = arr.shape[:2]
+        preset = chosen or pick_preset_for_file(presets, w, h, stem)
         if preset is not None:
             spec, pid = preset_spec(preset), preset["id"]
         else:
@@ -853,13 +1292,41 @@ class MainWindow(QMainWindow, Translatable):
 
         model = SheetModel(arr, spec, pid, stem, path)
         model.gender = detect_gender(stem) or GENDER_COMMON
+        model.forced_dirty = processed  # 크기·배경을 바꿨으면 원본과 다르므로 수정됨(*)
+        if not processed:
+            self._load_sibling_mask(model, path)
         self.config.push_recent("recent_files", path)
         self.config.set("last_open_dir", os.path.dirname(path))
         self._set_model(model)
-        self._show_message("status.opened", {"name": os.path.basename(path)})
+        if model.has_mask:
+            self._show_message("status.opened_with_mask",
+                               {"name": os.path.basename(path), "mask": os.path.basename(mc.mask_path_for(path))})
+        else:
+            self._show_message("status.opened_processed" if processed else "status.opened",
+                               {"name": os.path.basename(path), "w": w, "h": h})
         if not model.grid_matches_image():
             self._show_message("status.grid_image_mismatch_hint", {}, "warn")
         return True
+
+    def adjust_current_image(self) -> None:
+        """도구 > 크기·배경 조정: 열려 있는 시트에 가져오기 팝업을 다시 적용 (실행 취소 기록은 새로 시작)."""
+        m = self.model
+        if m is None:
+            return
+        presets = all_presets(self.config.get("sheet_presets", []))
+        res = self._run_import_dialog(m.arr, m.display_name, presets)
+        if res is None or not res[2]:
+            return
+        arr, preset, _ = res
+        h, w = arr.shape[:2]
+        preset = preset or pick_preset_for_file(presets, w, h, m.name)
+        spec, pid = (preset_spec(preset), preset["id"]) if preset else (GridSpec(1, 1, w, h), "custom")
+        new = SheetModel(arr, spec, pid, m.name, m.source_path)
+        new.save_path, new.gender, new.skin = m.save_path, m.gender, m.skin
+        new.forced_dirty = True
+        self._set_model(new)
+        self._show_message("status.adjusted_mask_dropped" if m.has_mask else "status.adjusted", {"w": w, "h": h},
+                           "warn" if m.has_mask else "info")
 
     def _set_model(self, model: SheetModel) -> None:
         self.model = model
@@ -872,7 +1339,28 @@ class MainWindow(QMainWindow, Translatable):
         self._fill_gender_combo()
         self._fill_preset_combo()
         self._refresh_body()
+        self._refresh_mask_view()
         self._update_all()
+
+    def _load_sibling_mask(self, model: SheetModel, path: str) -> None:
+        """`X.png`를 열 때 같은 폴더에 `X_M.png`가 있고 크기가 같으면 마스크로 함께 불러온다."""
+        if mc.is_mask_name(model.name):
+            self._show_message("status.opened_mask_file", {}, "warn")
+            return
+        mpath = mc.mask_path_for(path)
+        if not os.path.isfile(mpath):
+            return
+        try:
+            with Image.open(mpath) as im:
+                values = np.array(im.convert("L"), dtype=np.uint8)
+        except Exception:
+            return
+        if values.shape != model.mask.shape:
+            self._show_message("status.mask_size_skip", {"name": os.path.basename(mpath)}, "warn")
+            return
+        index, snapped = mc.png_to_index(values)
+        model.set_mask(index)
+        model.mask_snapped = snapped
 
     # ================================================================== #
     #  셀 편집                                                            #
@@ -881,9 +1369,15 @@ class MainWindow(QMainWindow, Translatable):
         return self.model is not None
 
     def _after_edit(self, label_key: str, fmt: dict | None = None, level: str = "info") -> None:
+        self._refresh_mask_view()
         self.canvas.refresh()
         self._update_all()
         self._show_message(label_key, fmt, level)
+
+    def _doc_mask(self) -> np.ndarray | None:
+        """편집에 같이 넘길 마스크 (마스크가 있는 시트일 때만)."""
+        m = self.model
+        return m.mask if (m is not None and m.has_mask) else None
 
     def copy_cells(self) -> bool:
         src = self.canvas.source() if self._need_model() else None
@@ -892,7 +1386,8 @@ class MainWindow(QMainWindow, Translatable):
             return False
         m = self.model
         self.clipboard = ClipboardData(cell_ops.copy_cells(m.arr, m.grid, src), src.shape,
-                                       m.grid.cell_w, m.grid.cell_h, m.gender)
+                                       m.grid.cell_w, m.grid.cell_h, m.gender,
+                                       cell_ops.copy_cells(m.mask, m.grid, src) if m.has_mask else None)
         self._update_actions()
         self._show_message("status.copied", {"rows": src.rows, "cols": src.cols})
         return True
@@ -901,7 +1396,7 @@ class MainWindow(QMainWindow, Translatable):
         if not self.copy_cells():
             return
         m, src = self.model, self.canvas.source()
-        m.history.do(m.arr, cell_ops.make_clear_edit(m.arr, m.grid, src, "edit.cut"))
+        m.history.do(m, cell_ops.make_clear_edit(m.arr, m.grid, src, "edit.cut", self._doc_mask()))
         self._after_edit("status.cut", {"rows": src.rows, "cols": src.cols})
 
     def clear_cells(self) -> None:
@@ -910,7 +1405,7 @@ class MainWindow(QMainWindow, Translatable):
             self._show_message("status.no_source", {}, "warn")
             return
         m = self.model
-        m.history.do(m.arr, cell_ops.make_clear_edit(m.arr, m.grid, src, "edit.clear"))
+        m.history.do(m, cell_ops.make_clear_edit(m.arr, m.grid, src, "edit.clear", self._doc_mask()))
         self._after_edit("status.cleared", {"rows": src.rows, "cols": src.cols})
 
     def _resolve_dest(self, shape: tuple[int, int]) -> tuple[int, int] | None:
@@ -959,15 +1454,18 @@ class MainWindow(QMainWindow, Translatable):
         anchor = self._resolve_dest(clip.shape)
         if anchor is None:
             return
-        block = clip.block
+        block, mblock = clip.block, clip.mask
         label_key, status_key = "edit.paste", "status.pasted"
         if mirror:
             block = cell_ops.mirror_block(block, m.grid)
+            mblock = cell_ops.mirror_block(mblock, m.grid) if mblock is not None else None
             label_key, status_key = "edit.paste_mirror", "status.pasted_mirror"
         if flip_v:
             block = cell_ops.flip_block_vertical(block, m.grid)
+            mblock = cell_ops.flip_block_vertical(mblock, m.grid) if mblock is not None else None
             label_key, status_key = "edit.paste_flipv", "status.pasted_flipv"
-        m.history.do(m.arr, cell_ops.make_paste_edit(m.arr, m.grid, anchor, block, label_key))
+        m.history.do(m, cell_ops.make_paste_edit(m.arr, m.grid, anchor, block, label_key,
+                                                 self._doc_mask(), mblock))
         # 미러는 비대칭 요소(가르마·무기 든 손)가 어긋날 수 있다 → 경고 문구 (§4.2)
         if mirror:
             self._after_edit("status.mirror_warn", {}, "warn")
@@ -988,20 +1486,170 @@ class MainWindow(QMainWindow, Translatable):
         if anchor is None:
             return
         block = cell_ops.mirror_block(cell_ops.copy_cells(m.arr, m.grid, src), m.grid)
-        m.history.do(m.arr, cell_ops.make_paste_edit(m.arr, m.grid, anchor, block, "edit.mirror_apply"))
+        mblock = cell_ops.mirror_block(cell_ops.copy_cells(m.mask, m.grid, src), m.grid) if m.has_mask else None
+        m.history.do(m, cell_ops.make_paste_edit(m.arr, m.grid, anchor, block, "edit.mirror_apply",
+                                                 self._doc_mask(), mblock))
         self._after_edit("status.mirror_warn", {}, "warn")
+
+    # ================================================================== #
+    #  2단계: Nudge / 회색+마스크 / 마스크 보기 / 색 미리보기·비교·통계    #
+    # ================================================================== #
+    def nudge(self, dx: int, dy: int) -> None:
+        """Source 셀(들)의 내용을 각 셀 안에서 (dx, dy) 픽셀 이동 (마스크도 같이)."""
+        src = self.canvas.source() if self._need_model() else None
+        if src is None:
+            self._show_message("status.no_source", {}, "warn")
+            return
+        m = self.model
+        m.history.do(m, cell_ops.make_nudge_edit(m.arr, m.grid, src, dx, dy, "edit.nudge", self._doc_mask()))
+        self._after_edit("status.nudged", {"dx": dx, "dy": dy, "rows": src.rows, "cols": src.cols})
+
+    def _replace_sheet_edit(self, rgba: np.ndarray, index: np.ndarray | None, label: str) -> Edit:
+        """시트 전체(+마스크)를 바꾸는 실행 취소 가능한 편집."""
+        m = self.model
+        new_mask = index if index is not None else np.zeros_like(m.mask)
+        edit = make_edit(m.arr, 0, 0, rgba, label, m.mask, new_mask)
+        edit.has_mask_before = m.has_mask
+        edit.has_mask_after = index is not None
+        return edit
+
+    def convert_to_gray_mask(self) -> None:
+        m = self.model
+        if m is None:
+            return
+        if not m.grid_matches_image():
+            self._show_message("status.grid_image_mismatch_hint", {}, "warn")
+            return
+        dlg = ConvertDialog(self, m.arr.copy(), m.grid, self.config, self.preview_colors.colors(),
+                            self.sp_gain.value())
+        if not dlg.exec() or dlg.result_gray is None:
+            return
+        m.history.do(m, self._replace_sheet_edit(dlg.result_gray, dlg.result_index, "edit.convert"))
+        m.mask_snapped = 0
+        if dlg.result_index is not None and self.config.get("mask_view.mode", MASK_VIEW_OFF) == MASK_VIEW_OFF:
+            self._set_mask_view(MASK_VIEW_OVERLAY)  # 결과를 바로 확인할 수 있게 오버레이를 켠다
+        self._after_edit("status.converted" if dlg.result_index is not None else "status.converted_gray")
+
+    def remove_mask(self) -> None:
+        m = self.model
+        if m is None or not m.has_mask:
+            return
+        edit = make_edit(m.arr, 0, 0, m.arr.copy(), "edit.remove_mask", m.mask, np.zeros_like(m.mask))
+        edit.has_mask_before, edit.has_mask_after = True, False
+        m.history.do(m, edit)
+        self._after_edit("status.mask_removed")
+
+    # -- 마스크 보기 ------------------------------------------------------
+    def _fill_mask_view_combo(self) -> None:
+        self.cb_mask_view.clear()
+        for mode in MASK_VIEW_MODES:
+            self.cb_mask_view.addItem(tr(f"maskview.{mode}"), mode)
+        cur = self.config.get("mask_view.mode", MASK_VIEW_OFF)
+        self.cb_mask_view.setCurrentIndex(max(0, self.cb_mask_view.findData(cur)))
+        self.a_missing.blockSignals(True)
+        self.a_missing.setChecked(bool(self.config.get("mask_view.missing", False)))
+        self.a_missing.blockSignals(False)
+        self.cb_missing.setChecked(self.a_missing.isChecked())
+        self.a_tint_view.blockSignals(True)
+        self.a_tint_view.setChecked(bool(self.config.get("outfit_preview.enabled", False)))
+        self.a_tint_view.blockSignals(False)
+        self.cb_tint.setChecked(self.a_tint_view.isChecked())
+
+    def _set_mask_view(self, mode: str) -> None:
+        self.config.set("mask_view.mode", mode)
+        self.cb_mask_view.setCurrentIndex(max(0, self.cb_mask_view.findData(mode)))
+        self._refresh_mask_view()
+
+    def _on_mask_view_activated(self, _i: int) -> None:
+        self._set_mask_view(self.cb_mask_view.currentData() or MASK_VIEW_OFF)
+
+    def _cycle_mask_view(self) -> None:
+        cur = self.config.get("mask_view.mode", MASK_VIEW_OFF)
+        i = MASK_VIEW_MODES.index(cur) if cur in MASK_VIEW_MODES else 0
+        self._set_mask_view(MASK_VIEW_MODES[(i + 1) % len(MASK_VIEW_MODES)])
+        self._show_message("status.mask_view", {"mode": tr(f"maskview.{self.config.get('mask_view.mode')}")})
+
+    def _on_mask_opacity(self, v: int) -> None:
+        self.config.set("mask_view.opacity", int(v))
+        self._refresh_mask_view()
+
+    def _toggle_missing(self, on: bool) -> None:
+        self.config.set("mask_view.missing", bool(on))
+        self._refresh_mask_view()
+
+    def _toggle_tint_view(self, on: bool) -> None:
+        self.config.set("outfit_preview.enabled", bool(on))
+        self._refresh_mask_view()
+
+    def _on_preview_colors(self) -> None:
+        self.config.set("outfit_preview.colors", colors_to_config(self.preview_colors.colors()))
+        self._refresh_mask_view()
+
+    def _on_gain(self, v: float) -> None:
+        self.config.set("outfit_preview.gain", round(float(v), 2))
+        self._refresh_mask_view()
+
+    def _refresh_mask_view(self) -> None:
+        """캔버스 표시 전용 그림(색 미리보기 / 마스크만 / 오버레이 / 누락 강조)을 다시 만든다."""
+        if not hasattr(self, "canvas"):
+            return
+        m = self.model
+        if m is None or not m.has_mask:
+            self.canvas.set_mask_view(None, None)
+            return
+        opaque = m.arr[..., 3] > 0
+        mode = self.config.get("mask_view.mode", MASK_VIEW_OFF)
+        display = overlay = None
+        if mode == MASK_VIEW_ONLY:
+            display = mc.pseudo_color(m.mask, opaque)
+        elif self.a_tint_view.isChecked():
+            display = mc.tint(m.arr, m.mask, self.preview_colors.colors(), self.sp_gain.value())
+        if mode == MASK_VIEW_OVERLAY:
+            overlay = mc.pseudo_color(m.mask, opaque)
+        if self.a_missing.isChecked():
+            miss = mc.missing_overlay(m.mask, opaque)
+            overlay = miss if overlay is None else np.where(miss[..., 3:] > 0, miss, overlay)
+        opacity = 100 if (overlay is not None and mode != MASK_VIEW_OVERLAY) else self.sl_mask_opacity.value()
+        self.canvas.set_mask_view(None if display is None else np.ascontiguousarray(display),
+                                  None if overlay is None else np.ascontiguousarray(overlay), opacity)
+
+    # -- 비교 / 통계 ------------------------------------------------------
+    def _compare_scope(self) -> tuple[np.ndarray, np.ndarray, str]:
+        """비교에 쓸 영역: Source 셀(들), 없으면 시트 전체."""
+        m = self.model
+        src = self.canvas.source()
+        if src is not None:
+            return (cell_ops.copy_cells(m.arr, m.grid, src), cell_ops.copy_cells(m.mask, m.grid, src),
+                    rect_label(src))
+        return m.arr.copy(), m.mask.copy(), tr("compare.whole_sheet")
+
+    def open_compare(self) -> None:
+        m = self.model
+        if m is None or not m.has_mask:
+            self._show_message("status.need_mask", {}, "warn")
+            return
+        gray, index, scope = self._compare_scope()
+        CompareDialog(self, gray, index, self.sp_gain.value(), self.config, scope).exec()
+
+    def open_stats(self) -> None:
+        m = self.model
+        if m is None or not m.has_mask:
+            self._show_message("status.need_mask", {}, "warn")
+            return
+        st = mc.mask_stats(m.mask, m.arr[..., 3], m.grid)
+        StatsDialog(self, st, on_highlight=lambda: self.a_missing.setChecked(True)).exec()
 
     def undo(self) -> None:
         if self.model is None:
             return
-        edit = self.model.history.undo(self.model.arr)
+        edit = self.model.history.undo(self.model)
         if edit:
             self._after_edit("status.undone", {"label": tr(edit.label)})
 
     def redo(self) -> None:
         if self.model is None:
             return
-        edit = self.model.history.redo(self.model.arr)
+        edit = self.model.history.redo(self.model)
         if edit:
             self._after_edit("status.redone", {"label": tr(edit.label)})
 
@@ -1059,11 +1707,38 @@ class MainWindow(QMainWindow, Translatable):
             m.arr, bool(self.config.get("alpha_threshold_enabled", True)),
             int(self.config.get("alpha_threshold", export_utils.DEFAULT_ALPHA_THRESHOLD)),
             self.config.get("transparent_rgb", export_utils.TRANSPARENT_BLACK))
+
+        # 마스크 저장 전 검증 (§4.3-5) — 알파 임계값을 적용한 최종 알파 기준
+        mask_index, mask_notes = None, []
+        if m.has_mask:
+            mask_index, issues = mc.validate_mask(out, m.mask, m.mask_snapped,
+                                                  float(self.config.get("mask_missing_warn_pct", 10)))
+            errors = [i for i in issues if i.level == "error"]
+            if errors:
+                QMessageBox.critical(self, tr("dlg.error.title"),
+                                     "\n".join(tr(i.key, **i.fmt) for i in errors))
+                return False
+            warns = [i for i in issues if i.level == "warn"]
+            mask_notes = [tr(i.key, **i.fmt) for i in issues if i.level == "info"]
+            if warns:
+                st = mc.mask_stats(mask_index, out[..., 3], m.grid)
+                lines = ["• " + tr(i.key, **i.fmt) for i in warns]
+                if st.inconsistent:
+                    lines.append("• " + tr("validate.mask_inconsistent", n=len(st.inconsistent)))
+                answer = QMessageBox.warning(
+                    self, tr("dlg.mask_check.title"), tr("dlg.mask_check.msg", items="\n".join(lines)),
+                    QMessageBox.Save | QMessageBox.Cancel, QMessageBox.Cancel)
+                if answer != QMessageBox.Save:
+                    return False
+
         try:
             backup = export_utils.save_png_rgba(out, path)
+            if mask_index is not None:
+                export_utils.save_png_l(mc.index_to_png(mask_index), mc.mask_path_for(path))
         except Exception as e:
             QMessageBox.critical(self, tr("dlg.error.title"), tr("dlg.save.failed", path=path, error=str(e)))
             return False
+        m.mask_snapped = 0
 
         m.save_path = path
         m.name = os.path.splitext(os.path.basename(path))[0]
@@ -1073,8 +1748,13 @@ class MainWindow(QMainWindow, Translatable):
         self.autosaver.clear()
         self._fill_save_dir_combo()
         self._update_all()
-        self._show_message("status.saved_to" if not backup else "status.saved_to_backup",
-                           {"path": path, "backup": os.path.basename(backup) if backup else ""})
+        if mask_index is not None:
+            self._show_message("status.saved_pair", {"path": path,
+                                                     "mask": os.path.basename(mc.mask_path_for(path)),
+                                                     "notes": (" · " + " · ".join(mask_notes)) if mask_notes else ""})
+        else:
+            self._show_message("status.saved_to" if not backup else "status.saved_to_backup",
+                               {"path": path, "backup": os.path.basename(backup) if backup else ""})
         return True
 
     def _confirm_discard(self) -> bool:
@@ -1111,7 +1791,7 @@ class MainWindow(QMainWindow, Translatable):
             "grid": {"cols": m.grid.cols, "rows": m.grid.rows,
                      "cell_w": m.grid.cell_w, "cell_h": m.grid.cell_h},
             "gender": m.gender, "skin": m.skin,
-            "background": self.canvas.background(), "body_opacity": self.sl_opacity.value(),
+            "background": self.canvas.background(), "body_opacity": self.body_layer.opacity,
             "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
 
@@ -1123,7 +1803,7 @@ class MainWindow(QMainWindow, Translatable):
         if marker == self._last_autosave_marker:
             return
         keep = int(self.config.get("autosave.keep", 2))
-        if self.autosaver.save(m.arr, self._autosave_meta(), keep) is not None:
+        if self.autosaver.save(m.arr, self._autosave_meta(), keep, m.mask if m.has_mask else None) is not None:
             self._last_autosave_marker = marker
             self._show_message("status.autosaved", {"time": time.strftime("%H:%M")})
 
@@ -1164,12 +1844,16 @@ class MainWindow(QMainWindow, Translatable):
         model.gender = meta.get("gender", GENDER_COMMON)
         model.skin = meta.get("skin", "T1")
         model.forced_dirty = True  # 저장하기 전까지는 수정됨
+        try:
+            mask = self.autosaver.load_mask(snap)
+        except Exception:
+            mask = None
+        if mask is not None and mask.shape == model.mask.shape:
+            model.set_mask(np.clip(mask, 0, 4))
         self._set_model(model)
         bg = meta.get("background")
         if bg in BACKGROUND_MODES:
             self._set_background(bg)
-        if "body_opacity" in meta:
-            self.sl_opacity.setValue(int(meta["body_opacity"]))
         self._autosave_tick()  # 복구본을 곧바로 새 자동 저장본으로 남겨 둔다 (또 비정상 종료돼도 안전)
         self._show_message("status.recovered", {"name": model.name})
 

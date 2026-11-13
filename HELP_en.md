@@ -5,8 +5,8 @@ Every edit, zoom and save uses **nearest-neighbor** only, so your pixels never g
 
 ## Quick start
 
-1. Press `Ctrl+O` to open a PNG sheet, or drop a file onto the window.
-2. A **sheet spec** matching the image size (H1 Walk 3 cols × 4 rows, H2 Combat 6 cols × 5 rows) is selected automatically. If nothing matches, the `Custom` dialog opens.
+1. Press `Ctrl+O` to open an image (PNG, JPG, ...), or drop a file onto the window.
+2. A **sheet spec** matching the image size (H1 Walk 3 cols × 4 rows, H2 Combat 6 cols × 5 rows) is selected automatically. If the size differs or the background is not transparent, the **Import Image** dialog opens (see below).
 3. Click a cell to choose the **Source**, then hold `Shift` or `Ctrl` and click to set the **Target**.
 4. Edit with `Ctrl+M` (Mirror & Apply) or `Ctrl+C` → `Ctrl+V`, etc.
 5. Press `Ctrl+S` to save. The first time, a dialog lets you pick the folder and file name.
@@ -20,7 +20,10 @@ Every edit, zoom and save uses **nearest-neighbor** only, so your pixels never g
 | Mouse wheel | Zoom 100–800% (integer scales) |
 | Middle-drag / `Space` + drag | Pan |
 | `G` | Toggle the grid |
-| `B` | Cycle the background (checkerboard → Base Body → white → black → dot grid) |
+| `B` | Cycle the background (checkerboard → white → black → dot grid) |
+| `Shift+B` | Show/hide the Base Body reference layer |
+| `Shift+E` | Show/hide the edit layer (to compare against the references) |
+| `Ctrl+Shift+R` | Add a reference layer (PNG) |
 
 Column headers read `C1 C2 C3` across the top and row headers `R1 R2 R3 R4` down the side. Cells are written like `R4C1` (row 4, column 1).
 
@@ -51,7 +54,61 @@ Column headers read `C1 C2 C3` across the top and row headers `R1 R2 R3 R4` down
 2. `Ctrl`+click the first cell of the destination row → `M`.
 
 **Check that hair/outfit positions line up with the Body**
-1. In the right panel under `Background`, choose `Base Body overlay` and adjust the opacity.
+1. Press `Shift+B` (or tick the Base Body row in the right panel's `Layers` list) and adjust its opacity there.
+
+## Layers: edit layer vs reference layers
+
+- The **edit layer** is the sheet you opened. Clicks, pastes and saves only ever affect it. It has a **thick outline** and appears as `[EDIT·saved]` in the list. The bar above the canvas always names it.
+- **Reference layers** (`[REF·above/below]`) are read-only pictures for checking alignment — the Base Body and any PNGs you add. They are tinted (turn off with `Tint references`) and are **never saved**.
+- Each layer has an eye checkbox; references also have an opacity slider and an above/below-the-sheet position.
+- **Limit: up to 6 reference layers** (Base Body 1 + 5 added PNGs). The edit layer is always exactly 1. Added references are not remembered after you quit; Base Body visibility/opacity/position are.
+
+## Import image (size & background)
+
+When you open an image whose **size differs from the sheet specs or whose background is not transparent** (e.g. output from A1111 or Gemini), this dialog appears.
+For an already open sheet use `Tools → Adjust Image Size / Background...` (`Ctrl+Shift+I`).
+
+- The **original size** and **background** (has transparency / solid #RRGGBB / not solid) are detected automatically.
+- **Sheet spec**: choose what the sheet will be used for. Width and height are calculated to fit it.
+- **Auto (keep ratio)** is the default: type only the width and the height follows (and vice versa). Choose **Custom** to enter width and height separately.
+- Quick buttons: `Fit to Sheet Spec` / `Original` / `50%`.
+- **Resampling**: `Nearest` for pixel art; `Box average` gives smoother results when shrinking large AI images.
+- **Fit to sheet**: pads with transparency or crops the overflow so the result matches the spec size exactly, so the grid and **Base Body** line up.
+- **Background**: `Auto` removes the border color. If the background is not solid, choose `Make chosen color transparent` and **click the original preview** or use the color button.
+  - **Tolerance**: higher values also remove similar colors (AI noise and soft edges).
+  - **Scope**: `Only areas connected to the edge` keeps the same color inside the character (eye whites, etc.). To also clear enclosed gaps (between arm and body), choose `Same color everywhere`.
+- `Apply and Open` opens the result as **modified (*)**; the original file is untouched. `Open Original` opens it as before.
+
+## Gray + mask (outfit sheets)
+
+Turns a color outfit sheet into a **gray sheet + index mask (`_M`)** for Unity's runtime tint (CHR-ART.5 §3.3).
+
+1. Open a color outfit sheet and choose `Tools → Convert Color → Gray + Mask...` (`Ctrl+Shift+G`).
+2. **Gray**: keep `Normalize brightness` on for new outfits (0.42–1.0, median 0.72). Turn it off for finished sheets (e.g. base underwear).
+3. **Region split**
+   - `Color based`: enter the region count (1–4) and press [Split]. Choose an index per chip (1 Primary / 2 Secondary / 3 Accent / 4 Patch / 0 None).
+     If the split is wrong, press a chip's color button and **click the original preview** to change its representative color (re-splits immediately).
+     If light and dark sides of the same garment are separated, lower `Lightness weight`.
+   - `Horizontal split`: single-color outfits. Set indices above/below a line y in each cell.
+   - `No mask`: fixed-color outfits (gray only).
+4. [Apply] → check borders with the mask overlay. It can be undone.
+5. `Ctrl+S` saves `name.png` (gray) and `name_M.png` (8-bit mask) together, after a mask check.
+
+### Mask view · color preview (left panel `Outfit Color · Mask`)
+- **Mask view**: Off / Overlay / Mask only (`Alt+M`). 1 red · 2 blue · 3 green · 4 yellow.
+- **Highlight missing pixels**: opaque pixels with region 0 are shown in magenta.
+- **Tint preview on canvas** (`Alt+T`): multiplies the 4 colors with the gray (same formula as the Unity shader). `Brightness gain` is 1.00 for new outfits, 1.33 for the base underwear.
+- Enter colors as `#RRGGBB`, click a swatch, or use `Paste colors` (4 `#RRGGBB` values from the clipboard — a copied sheet row works).
+- `Compare 4 Presets...` (`Ctrl+Shift+P`): shows the Source cell (or the whole sheet) with 4 presets + a squad color side by side. ⚠ means the color is too dark (V below 0.30) or the shading disappears.
+- `Mask Region Stats...` (`Ctrl+Shift+T`): region pixel counts per cell, region 0 (possibly missing), regions much smaller than in other cells (orange).
+- Confirm exact final colors in Unity.
+
+### Nudge
+- Select Source cell(s) and press `Alt+Arrow` (1px) / `Alt+Shift+Arrow` (5px). Content moves inside each cell; pixels pushed out of the cell are dropped. The mask moves too.
+
+### Mask files
+- Opening `X.png` also loads `X_M.png` from the same folder as the mask, if present.
+- Copy, paste, mirror and clear also handle the mask.
 
 ## Sheet specs (columns × rows)
 
@@ -85,10 +142,9 @@ Column headers read `C1 C2 C3` across the top and row headers `R1 R2 R3 R4` down
 
 ## Preferences
 
-`Settings → Preferences`: language (한국어 / English), theme (dark / light), grid color and thickness, save folder, alpha threshold, transparent pixel RGB, sheet spec presets, Base Body folder, autosave.
+`Settings → Preferences`: language (한국어 / English), theme (dark / light / orange / midnight blue / forest green / high contrast), grid color and thickness, save folder, alpha threshold, transparent pixel RGB, sheet spec presets, Base Body folder, autosave.
 Every value is saved to `config.json` as soon as you change it.
 
 ## Coming next (roadmap)
 
-- v0.2.0: color → gray + index mask conversion, in-cell nudge, preset color preview, mask region statistics
-- v0.3.0: mask boundary brushes, F/M pair mode, multiple reference layers
+- v0.3.0: mask boundary brushes, F/M pair mode

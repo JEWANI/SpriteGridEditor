@@ -208,6 +208,17 @@ class SheetModel:
         self.skin = "T1"
         self.history = History()
         self.forced_dirty = False  # 자동 저장 복구본 등 — 저장하기 전까지 수정됨으로 취급
+        # 인덱스 마스크 (0~4, CHR-ART.5 §3.3). has_mask=False면 마스크 없는 시트(회색만/컬러 원본).
+        self.mask = np.zeros(self.arr.shape[:2], dtype=np.uint8)
+        self.has_mask = False
+        self.mask_snapped = 0  # 불러온 _M 파일에서 규격 밖 값을 스냅한 픽셀 수 (저장 전 검증에 표시)
+
+    def set_mask(self, index: np.ndarray) -> None:
+        """불러온 마스크를 그대로 붙인다 (실행 취소 기록 없음 — 열기·복구 전용)."""
+        if index.shape != self.mask.shape:
+            raise ValueError("마스크 크기가 시트와 다릅니다")
+        self.mask[...] = index
+        self.has_mask = True
 
     # -- 크기 / 그리드 ----------------------------------------------------
     @property

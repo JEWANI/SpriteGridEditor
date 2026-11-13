@@ -43,17 +43,37 @@ DEFAULT_CONFIG = {
     # 열기
     "last_open_dir": "",
     "recent_files": [],
+    # 이미지 가져오기 (크기·배경 조정 팝업)
+    "import": {
+        "skip_when_ready": True,  # 크기가 규격과 맞고 투명 배경이 있으면 팝업 없이 바로 연다
+        "last_preset": "",  # 마지막으로 고른 시트 규격 id ("" = 비율이 가장 비슷한 규격)
+        "size_mode": "auto",  # "auto"(비율 유지) | "custom"(가로·세로 직접)
+        "resample": "nearest",  # nearest | box | lanczos
+        "tolerance": 32,  # 배경색 허용 오차 (채널별 최대 차이)
+        "scope": "edge",  # edge(가장자리와 이어진 부분만) | all(같은 색 전부)
+        "fit_canvas": True,  # 시트 규격 크기로 여백 채우기/잘라내기
+        "align": "center",  # center | top | bottom
+    },
     # 시트 규격 (기본 H1·H2는 코드에 내장, 여기엔 사용자 프리셋만)
     "sheet_presets": [],
     # 참조 (Base Body)
     "body_dir": DEFAULT_BODY_DIR,
     # 보기
-    "background_mode": "checker",  # checker | body | white | black | dots
+    "background_mode": "checker",  # checker | white | black | dots (구버전의 "body"는 body_visible 로 이전)
+    "body_visible": False,  # Base Body 참조 레이어 표시
     "body_opacity": 60,  # 0~100
+    "body_above": False,  # True: 시트 위에 겹침 / False: 시트 아래
+    "reference_tint": True,  # 참조 레이어에 색조를 입혀 편집 레이어와 구분
     "zoom_percent": 200,  # 100~800
     "grid": {"show": True, "color": "#00e5ff", "width": 1},
     # 자동 저장 (§4.5-5)
     "autosave": {"enabled": True, "interval_min": 10, "keep": 2},
+    # 2단계: 회색+마스크 변환 (§4.3)
+    "convert": {"mode": "color", "regions": 2, "l_weight": 50, "hsplit_y": 0, "despeckle": True},
+    "mask_view": {"mode": "off", "opacity": 60, "missing": False},  # off | overlay | only
+    "outfit_preview": {"enabled": False, "colors": [], "gain": 1.0},  # 캔버스 색 미리보기 (회색 × 색)
+    "mask_missing_warn_pct": 10,  # 저장 전 검증: 불투명 픽셀 중 인덱스 0 비율이 이 % 이상이면 경고
+    # compare.slots / compare.squad / compare.with_squad / compare.layout 은 비교 창이 처음 저장할 때 생긴다
 }
 
 

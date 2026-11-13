@@ -25,11 +25,18 @@ KEY_PATTERNS = [
     re.compile(r'\ba\(\s*"([A-Za-z0-9_.]+)"'),
     re.compile(r'\b_group\(\s*"([A-Za-z0-9_.]+)"'),
     re.compile(r'\b_label\(\s*"([A-Za-z0-9_.]+)"'),
-    re.compile(r'"((?:status|edit|dlg|settings|validate|panel|act|menu|tb|gender|preset|btn|theme|note|canvas)\.[A-Za-z0-9_.]+)"'),
+    re.compile(r'"((?:status|edit|dlg|settings|validate|panel|act|menu|tb|gender|preset|btn|theme|note|canvas|layer|layerbar)\.[A-Za-z0-9_.]+)"'),
 ]
 # 동적으로 조립되는 키 (f"bg.{mode}", f"note.{note}")
-DYNAMIC = ["bg.checker", "bg.body", "bg.white", "bg.black", "bg.dots",
-           "note.save_dir_missing", "note.save_dir_unwritable"]
+DYNAMIC = ["bg.checker", "bg.white", "bg.black", "bg.dots",
+           "note.save_dir_missing", "note.save_dir_unwritable",
+           "theme.dark", "theme.light", "theme.orange", "theme.midnight", "theme.forest", "theme.contrast",
+           "dlg.import.resample_nearest", "dlg.import.resample_box", "dlg.import.resample_lanczos",
+           "dlg.import.align_center", "dlg.import.align_bottom", "dlg.import.align_top",
+           "dlg.import.scope_edge", "dlg.import.scope_all",
+           "mask.idx0", "mask.idx1", "mask.idx2", "mask.idx3", "mask.idx4",
+           "maskview.off", "maskview.overlay", "maskview.only",
+           "dlg.convert.view_src", "dlg.convert.view_gray", "dlg.convert.view_mask", "dlg.convert.view_tint"]
 
 
 def keys_used_in_code():

@@ -2,7 +2,8 @@
 canvas_widget.py
 ------------------
 메인 캔버스 (기획서 §4.1): 줌(100~800%, 정수 배율 = **Nearest**) / 팬 / 그리드 오버레이 /
-셀 선택(Source·Target·다중 셀) / 배경 레이어(투명 체크무늬·Base Body·흰·검·도트 격자).
+셀 선택(Source·Target·다중 셀) / 배경(투명 체크무늬·흰·검·도트 격자) /
+참조 레이어(Base Body 등, 읽기 전용·색조 표시) / 편집 레이어 윤곽선.
 
 - 보간 없음: QPainter.drawImage를 정수 배율 + SmoothPixmapTransform 꺼짐으로 그린다.
 - 화면에 보이는 부분만 그린다 (800%에서도 가볍다).
@@ -23,6 +24,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QAbstractScrollArea
 
+from layer_model import RefLayer, stack_order
 from sheet_model import CellRect, SheetModel
 from theme import canvas_colors
 
@@ -32,11 +34,10 @@ HDR_H = 22  # 가로 머리글(C1…) 높이
 PAD = 16  # 시트 주변 여백
 
 BG_CHECKER = "checker"
-BG_BODY = "body"
 BG_WHITE = "white"
 BG_BLACK = "black"
 BG_DOTS = "dots"
-BACKGROUND_MODES = (BG_CHECKER, BG_BODY, BG_WHITE, BG_BLACK, BG_DOTS)
+BACKGROUND_MODES = (BG_CHECKER, BG_WHITE, BG_BLACK, BG_DOTS)
 
 
 def numpy_to_qimage(arr) -> QImage:
@@ -69,13 +70,20 @@ class CanvasWidget(QAbstractScrollArea):
 
         self._zoom = 200
         self._bg_mode = BG_CHECKER
-        self._body_image: QImage | None = None
-        self._body_opacity = 0.6
+        self._refs: list[RefLayer] = []
+        self._tint_cache: dict[tuple, QImage] = {}
+        self._reference_tint = True
+        self._edit_visible = True
         self._show_grid = True
         self._grid_color = QColor("#00e5ff")
         self._grid_width = 1
         self._theme = "dark"
         self._placeholder = ""
+        # 2단계: 표시 전용 그림 (저장과 무관). 배열 수명은 _view_bufs 로 붙잡아 둔다.
+        self._display_image: QImage | None = None  # 편집 레이어 대신 그릴 그림 (색 미리보기 / 마스크만 보기)
+        self._overlay_image: QImage | None = None  # 편집 레이어 위에 겹칠 그림 (마스크 의사색 / 누락 강조)
+        self._overlay_opacity = 60
+        self._view_bufs: list = []
 
         self._source: CellRect | None = None
         self._target: CellRect | None = None
@@ -117,6 +125,7 @@ class CanvasWidget(QAbstractScrollArea):
 
     def set_theme(self, theme: str) -> None:
         self._theme = theme
+        self._tint_cache.clear()
         self._checker = self._make_checker()
         self.viewport().update()
 
@@ -159,13 +168,29 @@ class CanvasWidget(QAbstractScrollArea):
     def background(self) -> str:
         return self._bg_mode
 
-    def set_body_image(self, image: QImage | None) -> None:
-        self._body_image = image
+    def set_mask_view(self, display, overlay, overlay_opacity: int = 60) -> None:
+        """표시 전용 그림 설정. display/overlay: (H,W,4) uint8 RGBA 배열 또는 None."""
+        self._view_bufs = [b for b in (display, overlay) if b is not None]
+        self._display_image = numpy_to_qimage(display) if display is not None else None
+        self._overlay_image = numpy_to_qimage(overlay) if overlay is not None else None
+        self._overlay_opacity = max(0, min(100, int(overlay_opacity)))
         self.viewport().update()
 
-    def set_body_opacity(self, percent: int) -> None:
-        self._body_opacity = max(0, min(100, percent)) / 100.0
+    def set_refs(self, refs: list[RefLayer]) -> None:
+        self._refs = list(refs)
+        self._tint_cache.clear()
         self.viewport().update()
+
+    def set_reference_tint(self, on: bool) -> None:
+        self._reference_tint = bool(on)
+        self.viewport().update()
+
+    def set_edit_visible(self, visible: bool) -> None:
+        self._edit_visible = bool(visible)
+        self.viewport().update()
+
+    def edit_visible(self) -> bool:
+        return self._edit_visible
 
     def set_show_grid(self, show: bool) -> None:
         self._show_grid = bool(show)
@@ -311,25 +336,37 @@ class CanvasWidget(QAbstractScrollArea):
         visible = sheet_rect.intersected(vp.rect())
 
         if not visible.isEmpty():
+            below, above = stack_order(self._refs)
             self._paint_backdrop(p, sheet_rect, visible, s, ox, oy)
-            # 시트 본체 (보이는 부분만)
+            for layer in below:
+                self._paint_ref(p, layer, visible, s, ox, oy, colors)
             sx0 = (visible.left() - ox) // s
             sy0 = (visible.top() - oy) // s
             sx1 = min(W, (visible.right() - ox) // s + 1)
             sy1 = min(H, (visible.bottom() - oy) // s + 1)
             src = QRect(sx0, sy0, sx1 - sx0, sy1 - sy0)
             dst = QRect(ox + sx0 * s, oy + sy0 * s, src.width() * s, src.height() * s)
-            p.drawImage(dst, self._image, src)
+            if self._edit_visible:
+                # 편집 레이어(시트 본체, 보이는 부분만). 색 미리보기·마스크만 보기 중이면 표시용 그림으로 대체
+                img = self._display_image if self._display_image is not None else self._image
+                p.drawImage(dst, img, src)
+            if self._overlay_image is not None and self._overlay_opacity > 0:
+                # 마스크 의사색 / 누락 픽셀 강조 (표시 전용, 저장 안 됨)
+                p.setOpacity(self._overlay_opacity / 100.0)
+                p.drawImage(dst, self._overlay_image, src)
+                p.setOpacity(1.0)
+            for layer in above:
+                self._paint_ref(p, layer, visible, s, ox, oy, colors)
 
         if self._show_grid:
             self._paint_grid(p, ox, oy, s, vp.rect())
         self._paint_selection(p, ox, oy, s, colors)
+        self._paint_edit_outline(p, ox, oy, s, colors)
         self._paint_headers(p, ox, oy, s, colors)
         p.end()
 
     def _paint_backdrop(self, p: QPainter, sheet_rect: QRect, visible: QRect, s: int,
                         ox: int, oy: int) -> None:
-        colors = canvas_colors(self._theme)
         mode = self._bg_mode
         if mode == BG_WHITE:
             p.fillRect(visible, QColor("#ffffff"))
@@ -338,22 +375,54 @@ class CanvasWidget(QAbstractScrollArea):
         elif mode == BG_DOTS:
             p.fillRect(visible, QColor("#20202a"))
             self._paint_pixel_grid(p, ox, oy, s, visible)
-        else:  # checker / body
+        else:  # checker
             p.setBrushOrigin(ox, oy)
             p.fillRect(visible, self._checker)
-            if mode == BG_BODY and self._body_image is not None and self._body_opacity > 0:
-                bw, bh = self._body_image.width(), self._body_image.height()
-                bx0 = (visible.left() - ox) // s
-                by0 = (visible.top() - oy) // s
-                bx1 = min(bw, (visible.right() - ox) // s + 1)
-                by1 = min(bh, (visible.bottom() - oy) // s + 1)
-                if bx1 > bx0 and by1 > by0:
-                    src = QRect(bx0, by0, bx1 - bx0, by1 - by0)
-                    dst = QRect(ox + bx0 * s, oy + by0 * s, src.width() * s, src.height() * s)
-                    p.setOpacity(self._body_opacity)
-                    p.drawImage(dst, self._body_image, src)
-                    p.setOpacity(1.0)
-        _ = colors
+
+    def _ref_image(self, layer: RefLayer, colors: dict) -> QImage:
+        """참조 레이어 그림. 색조 표시가 켜져 있으면 테마 색조를 입힌 사본(캐시)."""
+        img = layer.image
+        if not self._reference_tint or img is None:
+            return img
+        key = (id(img), colors["ref_tint"])
+        cached = self._tint_cache.get(key)
+        if cached is None:
+            cached = img.convertToFormat(QImage.Format_ARGB32_Premultiplied)
+            tp = QPainter(cached)
+            tp.setCompositionMode(QPainter.CompositionMode_SourceAtop)
+            tint = QColor(colors["ref_tint"])
+            tint.setAlpha(70)
+            tp.fillRect(cached.rect(), tint)
+            tp.end()
+            self._tint_cache[key] = cached
+        return cached
+
+    def _paint_ref(self, p: QPainter, layer: RefLayer, visible: QRect, s: int, ox: int, oy: int,
+                   colors: dict) -> None:
+        if not layer.visible or layer.image is None or layer.opacity <= 0:
+            return
+        img = self._ref_image(layer, colors)
+        bw, bh = img.width(), img.height()
+        bx0 = max(0, (visible.left() - ox) // s)
+        by0 = max(0, (visible.top() - oy) // s)
+        bx1 = min(bw, (visible.right() - ox) // s + 1)
+        by1 = min(bh, (visible.bottom() - oy) // s + 1)
+        if bx1 <= bx0 or by1 <= by0:
+            return
+        src = QRect(bx0, by0, bx1 - bx0, by1 - by0)
+        dst = QRect(ox + bx0 * s, oy + by0 * s, src.width() * s, src.height() * s)
+        p.setOpacity(layer.opacity / 100.0)
+        p.drawImage(dst, img, src)
+        p.setOpacity(1.0)
+
+    def _paint_edit_outline(self, p: QPainter, ox: int, oy: int, s: int, colors: dict) -> None:
+        """편집 레이어(=저장 대상 시트)를 둘러싸는 굵은 윤곽선. 참조 레이어에는 없다."""
+        W, H = self._model.width, self._model.height
+        rect = QRect(ox - 3, oy - 3, W * s + 6, H * s + 6)
+        pen = QPen(QColor(colors["edit_outline"]), 3, Qt.SolidLine if self._edit_visible else Qt.DashLine)
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+        p.drawRect(rect)
 
     def _paint_pixel_grid(self, p: QPainter, ox: int, oy: int, s: int, visible: QRect) -> None:
         """도트 격자 배경: 배율이 높으면 픽셀마다, 낮으면 10픽셀마다 선."""

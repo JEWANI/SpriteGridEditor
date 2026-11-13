@@ -25,6 +25,7 @@ import export_utils  # noqa: E402
 import i18n  # noqa: E402
 from autosave import AutoSaver  # noqa: E402
 from config_manager import ConfigManager  # noqa: E402
+from app_info import APP_VERSION  # noqa: E402
 from main_window import MainWindow  # noqa: E402
 from sheet_model import CellRect  # noqa: E402
 
@@ -88,7 +89,7 @@ class UiSmokeTests(unittest.TestCase):
         self.assertEqual((m.grid.cols, m.grid.rows, m.grid.cell_w, m.grid.cell_h), (3, 4, 100, 135))
         self.assertEqual(m.gender, "F")
         self.assertEqual(self.win.lb_body_name.text(), "BodyF_H1WK.png")  # Base Body 자동 매칭
-        self.assertEqual(self.win.windowTitle(), "SpriteGrid Editor v0.1.0 - H1WK_P001F.png")
+        self.assertEqual(self.win.windowTitle(), f"SpriteGrid Editor v{APP_VERSION} - H1WK_P001F.png")
         self.assertEqual(self.win.canvas.source(), CellRect.single(0, 0))
 
     def test_mouse_selection_source_target_and_range(self):
@@ -185,7 +186,7 @@ class UiSmokeTests(unittest.TestCase):
         self.assertEqual(int(saved[saved[..., 3] == 0][:, :3].sum()), 0)  # 투명 RGB (0,0,0)
         self.assertEqual(int(saved[:135, :100].sum()), 0)  # 지운 셀
         self.assertFalse(m.dirty)
-        self.assertEqual(self.win.windowTitle(), "SpriteGrid Editor v0.1.0 - H1WK_P002F.png")
+        self.assertEqual(self.win.windowTitle(), f"SpriteGrid Editor v{APP_VERSION} - H1WK_P002F.png")
         # 재저장 → 백업 생성
         self.win.canvas.set_source(CellRect.single(0, 1))
         self.win.clear_cells()
@@ -213,7 +214,7 @@ class UiSmokeTests(unittest.TestCase):
         cv.zoom_step(-1)
         self.assertEqual(cv.zoom(), 700)
         cv.set_zoom(300)
-        for mode in ("checker", "body", "white", "black", "dots"):
+        for mode in ("checker", "white", "black", "dots"):
             self.win._set_background(mode)
             _app.processEvents()
             img = cv.viewport().grab().toImage()
@@ -285,15 +286,118 @@ class UiSmokeTests(unittest.TestCase):
         preset_dialog.SheetSpecDialog.exec = lambda self_: 0
         import main_window as mw
         mw.SheetSpecDialog.exec = lambda self_: 0
-        self.assertTrue(self.win.open_file(odd))
+        from unittest import mock
+
+        # 규격과 다른 크기 → 가져오기 팝업이 뜬다. '원본 그대로 열기'를 고른 것처럼 처리
+        def open_raw(dlg):
+            dlg.open_raw = True
+            return 1
+
+        with mock.patch("import_dialog.ImportDialog.exec", open_raw):
+            self.assertTrue(self.win.open_file(odd))
         g = self.win.model.grid
         self.assertEqual((g.cols, g.rows, g.cell_w, g.cell_h), (1, 1, 123, 77))
+
+    # -- 레이어 구분 / 한도 / 테마 ------------------------------------------------
+    def test_layer_bar_and_list_distinguish_edit_and_reference(self):
+        self.assertIn("열린 시트가 없습니다", self.win.lb_layerbar.text())
+        self.win.open_file(self.sheet_path)
+        bar = self.win.lb_layerbar.text()
+        self.assertIn("편집 레이어", bar)
+        self.assertIn("H1WK_P001F.png", bar)
+        self.assertIn("표시 중인 것 없음", bar)  # Body 기본은 숨김
+        first = self.win.list_layers.item(0)
+        self.assertTrue(first.text().startswith("[편집"))
+        self.win._toggle_body()  # Shift+B
+        self.assertIn("참조 레이어 (읽기 전용", self.win.lb_layerbar.text())
+        self.assertIn("BodyF_H1WK.png", self.win.lb_layerbar.text())
+        texts = [self.win.list_layers.item(i).text() for i in range(self.win.list_layers.count())]
+        self.assertEqual(sum(t.startswith("[편집") for t in texts), 1)
+        self.assertTrue(any(t.startswith("[참조") for t in texts))
+
+    def test_reference_layer_limit_is_six_including_body(self):
+        from layer_model import MAX_REFERENCE_LAYERS
+        self.assertEqual(MAX_REFERENCE_LAYERS, 6)
+        self.win.open_file(self.sheet_path)
+        extras = []
+        for i in range(7):
+            p = os.path.join(self.dir, f"ref{i}.png")
+            make_sheet(p, seed=20 + i)
+            extras.append(p)
+        results = [self.win.add_reference_layer(p) for p in extras]
+        self.assertEqual(results, [True] * 5 + [False] * 2)  # Body 1 + 추가 5 = 6
+        self.assertEqual(len(self.win._all_refs()), 6)
+        self.assertFalse(self.win.btn_layer_add.isEnabled())
+        # 추가 레이어 하나를 목록에서 골라 제거 → 다시 추가 가능
+        last_uid = self.win.extra_layers[-1].uid
+        self.win._rebuild_layer_list(select=last_uid)
+        self.win._remove_selected_layer()
+        self.assertEqual(len(self.win.extra_layers), 4)
+        self.assertTrue(self.win.btn_layer_add.isEnabled())
+
+    def test_reference_layers_are_not_saved_and_not_edited(self):
+        self.win.open_file(self.sheet_path)
+        p = os.path.join(self.dir, "overlay.png")
+        make_sheet(p, w=300, h=540, seed=77)
+        self.assertTrue(self.win.add_reference_layer(p))
+        self.win.canvas.set_zoom(200)
+        _app.processEvents()
+        before = self.win.model.arr.copy()
+        self.click(0, 0)
+        self.assertTrue(np.array_equal(self.win.model.arr, before))  # 클릭은 편집 레이어 선택일 뿐
+        self.win._toggle_edit_visible()
+        self.assertFalse(self.win.canvas.edit_visible())
+        self.assertIn("숨김", self.win.lb_layerbar.text())
+        img = self.win.canvas.viewport().grab().toImage()
+        self.assertFalse(img.isNull())
+        self.win._toggle_edit_visible()
+        self.assertTrue(np.array_equal(self.win.model.arr, before))
+
+    def test_old_background_body_setting_migrates_to_body_layer(self):
+        self.win.close()
+        cfg = ConfigManager(os.path.join(self.dir, "config2.json"))
+        cfg.set("background_mode", "body")
+        cfg.set("body_dir", self.body_dir)
+        win = MainWindow(cfg, AutoSaver(os.path.join(self.dir, "autosave2")))
+        try:
+            self.assertEqual(cfg.get("background_mode"), "checker")
+            self.assertTrue(cfg.get("body_visible"))
+            self.assertTrue(win.body_layer.visible)
+        finally:
+            win.close()
+            self.win = MainWindow(self.cfg, AutoSaver(os.path.join(self.dir, "autosave3")))
+
+    def test_all_themes_apply_and_render(self):
+        from theme import THEMES, canvas_colors
+        self.assertGreaterEqual(len(THEMES), 6)
+        self.win.open_file(self.sheet_path)
+        self.win.body_layer.visible = True
+        self.win._push_layers()
+        for name in THEMES:
+            self.win._apply_theme(name)
+            _app.processEvents()
+            c = canvas_colors(name)
+            for k in ("workspace", "edit_outline", "ref_tint", "checker_a"):
+                self.assertIn(k, c)
+            self.assertFalse(self.win.canvas.viewport().grab().toImage().isNull())
+        self.win._apply_theme("dark")
+
+    def test_edit_outline_is_drawn_around_sheet(self):
+        self.win.open_file(self.sheet_path)
+        cv = self.win.canvas
+        cv.set_zoom(200)
+        cv.set_theme("orange")
+        _app.processEvents()
+        ox, oy = cv._origin()
+        img = cv.viewport().grab().toImage()
+        px = img.pixelColor(ox - 2, oy + 40)  # 시트 바로 바깥 (윤곽선 3px)
+        self.assertEqual(px.name(), "#ff8c1a")
 
     def test_screenshot_for_eyeballing(self):
         """레이아웃 육안 확인용 스크린샷 (실패 조건 없음)."""
         out = os.environ.get("SGE_SHOT")
         self.win.open_file(self.sheet_path)
-        self.win._set_background("body")
+        self.win.body_layer.visible = True
         self.win.canvas.set_zoom(200)
         self.click(3, 0)
         self.click(3, 2, Qt.ControlModifier)

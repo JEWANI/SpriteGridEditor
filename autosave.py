@@ -7,7 +7,8 @@ autosave.py
 - 세션마다 ``session_<pid>.lock`` 을 만들고, 정상 종료 시 지운다. 시작할 때 **프로세스가 이미 죽은
   pid의 lock + 스냅샷**이 남아 있으면 비정상 종료로 보고 복구를 제안한다. (pid별로 나눠서
   두 개를 동시에 실행해도 서로의 자동 저장본을 크래시로 오인하지 않는다.)
-- 스냅샷 = ``autosave_<pid>_<시각>.png`` (RGBA, 알파 그대로) + ``.json`` (그리드·체형·배경 설정 등).
+- 스냅샷 = ``autosave_<pid>_<시각>.png`` (RGBA, 알파 그대로) + ``.json`` (그리드·체형·배경 설정 등)
+  + 마스크가 있으면 ``…_mask.png`` (8비트, 인덱스 0~4 그대로).
 - 자동 저장본은 원본 PNG를 덮어쓰지 않는다 (내보내기와 별개).
 """
 
@@ -53,6 +54,13 @@ class Snapshot:
     stamp: str
     meta: dict
 
+    @property
+    def mask_path(self) -> str:
+        return self.png_path[:-4] + MASK_SUFFIX
+
+
+MASK_SUFFIX = "_mask.png"
+
 
 class AutoSaver:
     def __init__(self, folder: str | None = None, pid: int | None = None):
@@ -92,7 +100,7 @@ class AutoSaver:
         self._remove(self.lock_path)
 
     # -- 스냅샷 -------------------------------------------------------------
-    def save(self, arr: np.ndarray, meta: dict, keep: int) -> Snapshot | None:
+    def save(self, arr: np.ndarray, meta: dict, keep: int, mask: np.ndarray | None = None) -> Snapshot | None:
         try:
             os.makedirs(self.folder, exist_ok=True)
             stamp = time.strftime("%Y%m%d_%H%M%S")
@@ -103,6 +111,9 @@ class AutoSaver:
                 n += 1
                 base = os.path.join(self.folder, f"autosave_{self.pid}_{stamp}_{n}")
             Image.fromarray(np.ascontiguousarray(arr), "RGBA").save(base + ".png", format="PNG")
+            if mask is not None:
+                Image.fromarray(np.ascontiguousarray(mask, dtype=np.uint8), "L").save(
+                    base + MASK_SUFFIX, format="PNG")
             with open(base + ".json", "w", encoding="utf-8") as f:
                 json.dump(meta, f, ensure_ascii=False, indent=2)
         except OSError:
@@ -113,7 +124,7 @@ class AutoSaver:
     def list_snapshots(self) -> list[Snapshot]:
         result: list[Snapshot] = []
         for name in self._listdir():
-            if not (name.startswith("autosave_") and name.endswith(".png")):
+            if not (name.startswith("autosave_") and name.endswith(".png")) or name.endswith(MASK_SUFFIX):
                 continue
             stem = name[:-4]
             parts = stem.split("_")  # autosave, pid, date, time[, n]
@@ -137,6 +148,13 @@ class AutoSaver:
         with Image.open(snap.png_path) as im:
             return np.array(im.convert("RGBA"), dtype=np.uint8)
 
+    def load_mask(self, snap: Snapshot) -> np.ndarray | None:
+        """스냅샷에 마스크가 있으면 인덱스 마스크 (H, W) uint8, 없으면 None."""
+        if not os.path.isfile(snap.mask_path):
+            return None
+        with Image.open(snap.mask_path) as im:
+            return np.array(im.convert("L"), dtype=np.uint8)
+
     def prune(self, keep: int) -> None:
         mine = [s for s in self.list_snapshots() if s.pid == self.pid]
         for old in mine[max(1, keep):]:
@@ -145,6 +163,7 @@ class AutoSaver:
     def delete(self, snap: Snapshot) -> None:
         self._remove(snap.png_path)
         self._remove(snap.json_path)
+        self._remove(snap.mask_path)
 
     def clear(self) -> None:
         """이 세션의 스냅샷 전부 삭제 (정상 저장 / 정상 종료 / 복구 무시)."""

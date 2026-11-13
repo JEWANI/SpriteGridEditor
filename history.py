@@ -19,31 +19,59 @@ MAX_BYTES = 256 * 1024 * 1024
 
 @dataclass
 class Edit:
+    """한 번의 편집. 대상(target)은 RGBA 배열 하나이거나, ``arr``/``mask``/``has_mask``를 가진 문서(SheetModel).
+
+    문서가 대상이면 마스크 블록(``mask_before/after``)과 마스크 유무(``has_mask_before/after``)도
+    같은 편집 단위로 되돌린다 (2단계: 회색+마스크 변환·마스크와 함께 움직이는 셀 편집).
+    """
+
     label: str  # 상태바에 보일 작업 이름 (i18n 키)
     y0: int
     x0: int
     before: np.ndarray  # (h, w, 4)
     after: np.ndarray
+    mask_before: np.ndarray | None = None  # (h, w) 인덱스 마스크
+    mask_after: np.ndarray | None = None
+    has_mask_before: bool | None = None
+    has_mask_after: bool | None = None
 
     @property
     def nbytes(self) -> int:
-        return int(self.before.nbytes + self.after.nbytes)
+        n = self.before.nbytes + self.after.nbytes
+        for m in (self.mask_before, self.mask_after):
+            if m is not None:
+                n += m.nbytes
+        return int(n)
 
-    def _write(self, arr: np.ndarray, block: np.ndarray) -> None:
+    def _write(self, target, block: np.ndarray, mask_block: np.ndarray | None, has_mask: bool | None) -> None:
+        arr = target if isinstance(target, np.ndarray) else target.arr
         h, w = block.shape[:2]
         arr[self.y0:self.y0 + h, self.x0:self.x0 + w] = block
+        if isinstance(target, np.ndarray):
+            return
+        if has_mask is not None:
+            target.has_mask = has_mask
+        if mask_block is not None:
+            mh, mw = mask_block.shape[:2]
+            target.mask[self.y0:self.y0 + mh, self.x0:self.x0 + mw] = mask_block
 
-    def apply(self, arr: np.ndarray) -> None:
-        self._write(arr, self.after)
+    def apply(self, target) -> None:
+        self._write(target, self.after, self.mask_after, self.has_mask_after)
 
-    def revert(self, arr: np.ndarray) -> None:
-        self._write(arr, self.before)
+    def revert(self, target) -> None:
+        self._write(target, self.before, self.mask_before, self.has_mask_before)
 
 
-def make_edit(arr: np.ndarray, y0: int, x0: int, new_block: np.ndarray, label: str) -> Edit:
-    """arr의 (y0,x0) 위치 영역을 new_block으로 바꾸는 Edit을 만든다 (arr는 아직 안 바뀜)."""
+def make_edit(arr: np.ndarray, y0: int, x0: int, new_block: np.ndarray, label: str,
+              mask: np.ndarray | None = None, new_mask_block: np.ndarray | None = None) -> Edit:
+    """arr의 (y0,x0) 위치 영역을 new_block으로 바꾸는 Edit을 만든다 (arr는 아직 안 바뀜).
+    mask와 new_mask_block을 주면 마스크의 같은 영역도 함께 바꾼다."""
     h, w = new_block.shape[:2]
-    return Edit(label, y0, x0, arr[y0:y0 + h, x0:x0 + w].copy(), np.array(new_block, copy=True))
+    edit = Edit(label, y0, x0, arr[y0:y0 + h, x0:x0 + w].copy(), np.array(new_block, copy=True))
+    if mask is not None and new_mask_block is not None:
+        edit.mask_before = mask[y0:y0 + h, x0:x0 + w].copy()
+        edit.mask_after = np.array(new_mask_block, dtype=np.uint8, copy=True)
+    return edit
 
 
 class History:

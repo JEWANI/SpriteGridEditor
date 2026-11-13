@@ -24,6 +24,9 @@ autosave/
 # 개인 개발 기록 (저장소에 올리지 않음)
 *개발일지*.md
 
+# 배포 압축본 (GitHub Releases에 첨부)
+*.zip
+
 # 편집 백업 · 테스트 임시 파일
 *_backup.png
 .pytest_cache/
