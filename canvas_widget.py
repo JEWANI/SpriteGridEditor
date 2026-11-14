@@ -12,6 +12,9 @@ canvas_widget.py
 
 조작: 클릭(드래그) = Source 선택 · Shift/Ctrl+클릭(드래그) = Target 지정 · 휠 = 줌 ·
       휠 클릭 드래그 / Space+드래그 = 이동.
+3단계: 마스크 도구(paint tool)가 켜져 있으면 그냥 클릭/드래그는 **칠하기**가 되고(픽셀 좌표를 시그널로 알림),
+      Alt+클릭 = Source 선택, Shift/Ctrl+클릭 = Target 지정은 그대로 쓸 수 있다.
+      읽기 전용 모드(쌍 작업 참조 시트)는 이동·확대만 된다.
 """
 
 from __future__ import annotations
@@ -52,6 +55,9 @@ class CanvasWidget(QAbstractScrollArea):
     hoverPixel = Signal(int, int)  # 시트 픽셀 좌표 (밖이면 -1, -1)
     contextMenuRequested = Signal(QPoint)  # 전역 좌표
     filesDropped = Signal(list)
+    paintPressed = Signal(int, int)  # 시트 픽셀 좌표 (마스크 도구용)
+    paintMoved = Signal(int, int)
+    paintReleased = Signal(int, int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -91,6 +97,12 @@ class CanvasWidget(QAbstractScrollArea):
         self._drag_anchor: tuple[int, int] | None = None
         self._pan_last = QPoint()
         self._space_down = False
+        # 3단계: 마스크 도구 / 읽기 전용
+        self._paint_tool: str | None = None
+        self._brush_size = 1
+        self._hover_px: tuple[int, int] | None = None
+        self._rect_drag: tuple[tuple[int, int], tuple[int, int]] | None = None  # 사각형 도구 미리보기(픽셀 좌표)
+        self._readonly = False
 
         self._checker = self._make_checker()
         self.horizontalScrollBar().valueChanged.connect(lambda _v: self.viewport().update())
@@ -185,6 +197,30 @@ class CanvasWidget(QAbstractScrollArea):
         self._reference_tint = bool(on)
         self.viewport().update()
 
+    def set_paint_tool(self, tool: str | None, brush_size: int = 1) -> None:
+        """마스크 도구 설정. tool=None이면 일반 선택 모드. 도구가 켜진 동안 커서는 십자."""
+        self._paint_tool = tool
+        self._brush_size = max(1, int(brush_size))
+        self._rect_drag = None
+        if tool is None:
+            self.viewport().unsetCursor()
+        else:
+            self.viewport().setCursor(QCursor(Qt.CrossCursor))
+        self.viewport().update()
+
+    def paint_tool(self) -> str | None:
+        return self._paint_tool
+
+    def set_brush_size(self, size: int) -> None:
+        self._brush_size = max(1, int(size))
+        self.viewport().update()
+
+    def set_readonly(self, readonly: bool) -> None:
+        """읽기 전용: 선택·편집 입력과 파일 끌어다 놓기를 받지 않고 이동·확대만 한다 (쌍 작업 참조 시트)."""
+        self._readonly = bool(readonly)
+        self.setAcceptDrops(not readonly)
+        self.viewport().setAcceptDrops(not readonly)
+
     def set_edit_visible(self, visible: bool) -> None:
         self._edit_visible = bool(visible)
         self.viewport().update()
@@ -272,6 +308,16 @@ class CanvasWidget(QAbstractScrollArea):
         if 0 <= ix < self._model.width and 0 <= iy < self._model.height:
             return ix, iy
         return None
+
+    def pixel_at_clamped(self, pos: QPoint) -> tuple[int, int] | None:
+        """뷰포트 좌표 → 시트 픽셀 좌표 (시트 밖이면 가장 가까운 가장자리 픽셀)."""
+        if self._model is None:
+            return None
+        ox, oy = self._origin()
+        s = self._scale()
+        ix = math.floor((pos.x() - ox) / s)
+        iy = math.floor((pos.y() - oy) / s)
+        return (max(0, min(self._model.width - 1, ix)), max(0, min(self._model.height - 1, iy)))
 
     def cell_at(self, pos: QPoint, clamp: bool = False) -> tuple[int, int] | None:
         """뷰포트 좌표 → (행, 열). clamp=True면 시트 밖도 가장 가까운 셀로."""
@@ -361,6 +407,7 @@ class CanvasWidget(QAbstractScrollArea):
         if self._show_grid:
             self._paint_grid(p, ox, oy, s, vp.rect())
         self._paint_selection(p, ox, oy, s, colors)
+        self._paint_tool_preview(p, ox, oy, s, colors)
         self._paint_edit_outline(p, ox, oy, s, colors)
         self._paint_headers(p, ox, oy, s, colors)
         p.end()
@@ -414,6 +461,27 @@ class CanvasWidget(QAbstractScrollArea):
         p.setOpacity(layer.opacity / 100.0)
         p.drawImage(dst, img, src)
         p.setOpacity(1.0)
+
+    def _paint_tool_preview(self, p: QPainter, ox: int, oy: int, s: int, colors: dict) -> None:
+        """마스크 도구 미리보기: 연필/지우개는 브러시 영역, 사각형은 드래그 중인 영역, 채우기는 한 픽셀."""
+        if self._paint_tool is None:
+            return
+        pen = QPen(QColor(colors["target"]), 1)
+        pen.setCosmetic(True)
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+        if self._rect_drag is not None:
+            (x0, y0), (x1, y1) = self._rect_drag
+            xa, xb = sorted((x0, x1))
+            ya, yb = sorted((y0, y1))
+            p.drawRect(QRect(ox + xa * s, oy + ya * s, (xb - xa + 1) * s - 1, (yb - ya + 1) * s - 1))
+            return
+        if self._hover_px is None:
+            return
+        x, y = self._hover_px
+        size = self._brush_size if self._paint_tool in ("pencil", "eraser") else 1
+        half = size // 2
+        p.drawRect(QRect(ox + (x - half) * s, oy + (y - half) * s, size * s - 1, size * s - 1))
 
     def _paint_edit_outline(self, p: QPainter, ox: int, oy: int, s: int, colors: dict) -> None:
         """편집 레이어(=저장 대상 시트)를 둘러싸는 굵은 윤곽선. 참조 레이어에는 없다."""
@@ -552,15 +620,27 @@ class CanvasWidget(QAbstractScrollArea):
             self._pan_last = pos
             self.viewport().setCursor(QCursor(Qt.ClosedHandCursor))
             return
-        if event.button() != Qt.LeftButton:
+        if event.button() != Qt.LeftButton or self._readonly:
             return
         # 머리글 영역은 무시
         if pos.x() < HDR_W or pos.y() < HDR_H:
             return
+        mods = event.modifiers()
+        if self._paint_tool is not None and not (mods & (Qt.ShiftModifier | Qt.ControlModifier | Qt.AltModifier)):
+            px = self.pixel_at(pos)
+            if px is None:
+                return
+            self._drag_mode = "paint"
+            self._hover_px = px
+            if self._paint_tool == "rect":
+                self._rect_drag = (px, px)
+            self.paintPressed.emit(*px)
+            self.viewport().update()
+            return
         cell = self.cell_at(pos)
         if cell is None:
             return
-        if event.modifiers() & (Qt.ShiftModifier | Qt.ControlModifier):
+        if mods & (Qt.ShiftModifier | Qt.ControlModifier):
             self._drag_mode = "target"
             self._drag_anchor = cell
             self.set_target(CellRect.single(*cell))
@@ -574,6 +654,18 @@ class CanvasWidget(QAbstractScrollArea):
         if self._model is not None:
             px = self.pixel_at(pos)
             self.hoverPixel.emit(*(px if px else (-1, -1)))
+            if self._paint_tool is not None:
+                self._hover_px = px
+                self.viewport().update()
+        if self._drag_mode == "paint":
+            px = self.pixel_at_clamped(pos)
+            if px is not None:
+                self._hover_px = px
+                if self._rect_drag is not None:
+                    self._rect_drag = (self._rect_drag[0], px)
+                self.paintMoved.emit(*px)
+                self.viewport().update()
+            return
         if self._drag_mode == "pan":
             d = pos - self._pan_last
             self._pan_last = pos
@@ -591,7 +683,16 @@ class CanvasWidget(QAbstractScrollArea):
             elif rect != self._target:
                 self.set_target(rect)
 
-    def mouseReleaseEvent(self, _event) -> None:
+    def mouseReleaseEvent(self, event) -> None:
+        if self._drag_mode == "paint":
+            px = self.pixel_at_clamped(event.position().toPoint())
+            self._rect_drag = None
+            self._drag_mode = None
+            self._drag_anchor = None
+            if px is not None:
+                self.paintReleased.emit(*px)
+            self.viewport().update()
+            return
         if self._drag_mode == "pan":
             if self._space_down:
                 self.viewport().setCursor(QCursor(Qt.OpenHandCursor))
@@ -602,6 +703,9 @@ class CanvasWidget(QAbstractScrollArea):
 
     def leaveEvent(self, event) -> None:
         self.hoverPixel.emit(-1, -1)
+        if self._hover_px is not None:
+            self._hover_px = None
+            self.viewport().update()
         super().leaveEvent(event)
 
     # -- 파일 끌어다 놓기 -----------------------------------------------------

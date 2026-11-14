@@ -79,13 +79,15 @@ class SaveDialog(QDialog):
         self.gb_helper.setCheckable(True)
         parsed = export_utils.parse_name(model.name or "")
         self.gb_helper.setChecked(parsed is None)
-        hform = QHBoxLayout(self.gb_helper)
+        hform = QHBoxLayout()
         self.ed_prefix = QLineEdit(parsed[0] if parsed else prefix_hint)
         self.ed_prefix.setMaximumWidth(110)
         self.cb_kind = QComboBox()
-        self.cb_kind.addItems(export_utils.NAME_KINDS)
+        for k in export_utils.NAME_KINDS:  # 글자만 보이면 뜻을 알 수 없으므로 "U — 속옷"처럼 설명을 붙인다
+            self.cb_kind.addItem(tr(f"dlg.save.kind_{k}"), userData=k)
         if parsed and parsed[1] in export_utils.NAME_KINDS:
-            self.cb_kind.setCurrentText(parsed[1])
+            self.cb_kind.setCurrentIndex(max(0, self.cb_kind.findData(parsed[1])))
+        self.cb_kind.setToolTip(tr("dlg.save.kind_tip"))
         self.sp_num = QSpinBox()
         self.sp_num.setRange(0, 999)
         self.sp_num.setValue(parsed[2] if parsed else 1)
@@ -94,6 +96,12 @@ class SaveDialog(QDialog):
                   self.cb_kind, QLabel(tr("dlg.save.number")), self.sp_num, self.lb_gender):
             hform.addWidget(w)
         hform.addStretch(1)
+        self.lb_helper_desc = QLabel()
+        self.lb_helper_desc.setObjectName("DimLabel")
+        self.lb_helper_desc.setWordWrap(True)
+        hv = QVBoxLayout(self.gb_helper)
+        hv.addLayout(hform)
+        hv.addWidget(self.lb_helper_desc)
         layout.addWidget(self.gb_helper)
 
         self.lb_warn = QLabel()
@@ -119,8 +127,12 @@ class SaveDialog(QDialog):
         self.lb_gender.setText(tr("dlg.save.gender_fmt", gender={"F": "F", "M": "M"}.get(g, tr("gender.none"))))
         if self.gb_helper.isChecked():
             name = export_utils.build_name(self.ed_prefix.text().strip() or "H1WK",
-                                           self.cb_kind.currentText(), self.sp_num.value(), g)
+                                           self.cb_kind.currentData(), self.sp_num.value(), g)
             self.ed_name.setText(name)
+        kind = self.cb_kind.currentData() or ""
+        self.lb_helper_desc.setText(tr("dlg.save.helper_desc", prefix=self.ed_prefix.text().strip() or "H1WK",
+                                       kind=kind, kind_name=tr(f"dlg.save.kind_{kind}") if kind else "",
+                                       number=self.sp_num.value(), gender=tr(f"dlg.save.gender_name_{g if g in ('F', 'M') else 'C'}")))
         self._validate()
 
     def _clean_name(self) -> str:

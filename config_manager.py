@@ -72,6 +72,10 @@ DEFAULT_CONFIG = {
     "convert": {"mode": "color", "regions": 2, "l_weight": 50, "hsplit_y": 0, "despeckle": True},
     "mask_view": {"mode": "off", "opacity": 60, "missing": False},  # off | overlay | only
     "outfit_preview": {"enabled": False, "colors": [], "gain": 1.0},  # 캔버스 색 미리보기 (회색 × 색)
+    # 3단계: 마스크 경계 보정 / F·M 쌍 작업 / 파츠 참조
+    "mask_edit": {"brush": 1, "scope": "cell"},  # scope: cell | selection | sheet
+    "pair": {"view": "side", "overlay_opacity": 40},  # view: side(나란히) | overlay(겹쳐보기)
+    "allies_dir": "",  # 비어 있으면 Base Body 폴더의 상위(Allies) 폴더
     "mask_missing_warn_pct": 10,  # 저장 전 검증: 불투명 픽셀 중 인덱스 0 비율이 이 % 이상이면 경고
     # compare.slots / compare.squad / compare.with_squad / compare.layout 은 비교 창이 처음 저장할 때 생긴다
 }

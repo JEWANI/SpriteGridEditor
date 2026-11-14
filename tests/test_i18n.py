@@ -35,6 +35,10 @@ DYNAMIC = ["bg.checker", "bg.white", "bg.black", "bg.dots",
            "dlg.import.align_center", "dlg.import.align_bottom", "dlg.import.align_top",
            "dlg.import.scope_edge", "dlg.import.scope_all",
            "mask.idx0", "mask.idx1", "mask.idx2", "mask.idx3", "mask.idx4",
+           "dlg.save.kind_U", "dlg.save.kind_P", "dlg.save.kind_G", "dlg.save.kind_N", "dlg.save.kind_S",
+           "dlg.save.gender_name_F", "dlg.save.gender_name_M", "dlg.save.gender_name_C",
+           "tool.select", "tool.pencil", "tool.fill", "tool.rect", "tool.eraser",
+           "tool.index1", "tool.index2", "tool.index3", "tool.index4",
            "maskview.off", "maskview.overlay", "maskview.only",
            "dlg.convert.view_src", "dlg.convert.view_gray", "dlg.convert.view_mask", "dlg.convert.view_tint"]
 

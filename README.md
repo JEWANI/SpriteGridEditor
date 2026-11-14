@@ -9,9 +9,16 @@
 
 ![SpriteGrid Editor 메인 화면 (H1 걷기 시트, Base Body 참조)](docs/images/main_ko.png)
 
-## 📌 주요 기능 (V0.2.0)
+## 📌 주요 기능 (V0.3.0)
 
-### 🎨 회색 + 마스크 (2단계)
+### 🖌 마스크 보정 · 쌍 작업 (3단계)
+- **마스크 경계 보정 브러시** — 연필 · 채우기 · 사각형 · 번호 교체 · 지우개, **알파 보호**, 적용 범위(현재 셀 / 선택 셀 / 시트 전체), 획 단위 실행 취소
+- **셀 간 마스크 복사** — 마스크만 Target으로 / 같은 행 전체로 (그림은 그대로)
+- **F/M 쌍 작업 모드** — 반대 체형 새 문서로 복제하고 원본을 읽기 전용 참조(나란히 / 겹쳐보기)로 두고 위치를 다시 맞춤
+- **파츠 참조 레이어** — 편집 파츠 기준으로 Eyes/Outfit/Hair/Helmet/Weapon 참조를 §7 합성 순서대로 위/아래 배치, `Allies/<파츠>/` 자동 불러오기
+
+
+### 🎨 회색 + 마스크 (2단계, V0.2.0)
 - **컬러 → 회색 + 인덱스 마스크(`_M`) 자동 변환** — 색 기반 Lab k-means(영역 수 1~4, 스포이트 대표색 보정) / 수평 분할 / 회색만
 - 밝기 정규화(0.42~1.0, 중앙값 0.72, CHR-ART.5 §3.1), 잡티 정리, 알파 보호
 - 마스크 보기(오버레이 / 마스크만), 누락 픽셀 강조, **캔버스 색 미리보기**(Unity 셰이더와 같은 `회색 × Gain × 색`)
@@ -49,7 +56,17 @@
 - 자동 저장(10분 · 2개) + 비정상 종료 후 복구
 
 ### 🌐 앱 공통
-- 제목줄 `SpriteGrid Editor v0.2.0 - 파일명 *`, 도움말(사용법 F1 / 변경 내역 / 정보), 한국어·English, 테마 6종
+- 제목줄 `SpriteGrid Editor v0.3.0 - 파일명 *`, 도움말(사용법 F1 / 변경 내역 / 정보), 한국어·English, 테마 6종
+
+---
+
+## 📦 다운로드
+
+[Releases](https://github.com/JEWANI/SpriteGridEditor/releases/latest)에서 `SpriteGridEditor_v0.3.0_win64.zip`을 받아 압축을 풀고
+`SpriteGridEditor v0.3.0.exe`를 실행한다 (Windows 10/11 64bit, 설치 불필요).
+압축 안에는 실행파일과 함께 `README.txt`(빠른 시작) · `CHANGELOG.md`(업데이트 내역) · `HELP_ko.md` / `HELP_en.md`(사용법)가 들어 있다.
+
+> 서명되지 않은 실행파일이라 처음 실행할 때 Windows SmartScreen 경고가 뜰 수 있다 → `추가 정보` → `실행`.
 
 ---
 
@@ -65,7 +82,7 @@ python main.py
 ```bash
 pip install pyinstaller
 ```
-`실행파일 만들기.bat` 더블클릭 → `dist/SpriteGridEditor v0.2.0.exe` 생성 (버전은 `app_info.py` 에서 읽는다).
+`실행파일 만들기.bat` 더블클릭 → `dist/SpriteGridEditor v0.3.0.exe` 생성 (버전은 `app_info.py` 에서 읽는다).
 `locales/`, `HELP_*.md`, `CHANGELOG.md`, `icon.ico` 는 exe 안에 포함되고,
 `config.json` · `autosave/` · `output/` 은 **exe 가 있는 폴더**에 만들어진다.
 
@@ -73,7 +90,7 @@ pip install pyinstaller
 ```bash
 python -m unittest discover tests -v
 ```
-(cell_ops · history · export_utils · 자동 저장 · i18n 단위 테스트 + 오프스크린 UI 스모크 테스트)
+(cell_ops · history · export_utils · 자동 저장 · i18n · 회색+마스크 변환 · 3단계 브러시/쌍 작업 단위 테스트 + 오프스크린 UI 스모크 테스트, 118개)
 
 ---
 
@@ -99,6 +116,8 @@ SpriteGridEditor/
 ├── import_utils.py        # 가져오기 전처리: 배경 감지·투명화·비율 계산·리사이즈·시트 맞춤 (Qt 없음)
 ├── import_dialog.py       # 이미지 가져오기 팝업 (크기·배경)
 ├── mask_convert.py        # 회색·밝기 정규화·Lab k-means·마스크 후처리·틴트·통계·검증 (Qt 없음)
+├── mask_tools.py          # 마스크 보정 브러시(연필·채우기·사각형·번호 교체)·마스크 복사 (Qt 없음)
+├── pair_mode.py           # F/M 쌍 작업 · 파츠 합성 순서 (Qt 없음)
 ├── convert_dialog.py      # 컬러→회색+마스크 변환 창
 ├── compare_dialog.py      # 프리셋 4색 비교 창
 ├── stats_dialog.py        # 마스크 영역 통계 창
@@ -109,7 +128,7 @@ SpriteGridEditor/
 ├── about_dialog.py, help_dialog.py, ui_utils.py
 ├── HELP_ko.md, HELP_en.md, CHANGELOG.md, README.md
 ├── icon.ico, requirements.txt, .gitignore, 실행파일 만들기.bat
-├── tests/                 # test_core.py, test_i18n.py, test_ui_smoke.py
+├── tests/                 # test_core · test_i18n · test_import · test_mask · test_stage3 · test_ui_smoke
 ├── config.json            # (자동 생성, git 제외)
 ├── output/                # (자동 생성) 저장 폴더 미지정 시 기본 저장 위치 — git 제외
 └── autosave/              # (자동 생성) 자동 저장본 — git 제외
@@ -123,7 +142,7 @@ SpriteGridEditor/
 | :--- | :--- | :--- |
 | **1단계** | **V0.1.0** ✅ | 시트 열기/저장, 규격 프리셋, 그리드·줌, 셀 편집·다중 셀, Undo/Redo, 배경 레이어, 알파 임계값, 자동 저장, 공통 구성 |
 | **2단계** | **V0.2.0** ✅ | 컬러 → 회색 + 마스크 자동 변환, 밝기 정규화, Nudge, 프리셋 색 미리보기·4색 비교, 마스크 통계, 저장 전 검증 (Unity 정비실 확인 대기) |
-| 3단계 | V0.3.0 | 마스크 경계 보정 브러시, F/M 쌍 작업 모드 (다중 참조 레이어는 V0.1.1에서 선반영) |
+| **3단계** | **V0.3.0** ✅ | 마스크 경계 보정 브러시, 셀 간 마스크 복사, 마스크 오버레이, F/M 쌍 작업 모드, 파츠 참조 레이어 (실제 옷으로 사용 확인 대기) |
 | 4단계 | V0.4.0~ | 파일명 검증 강화, 배치 변환, 미러 제외 영역, `.meta` 복제 검토 |
 
 *전체 변경 이력은 [CHANGELOG.md](./CHANGELOG.md) 참고.*

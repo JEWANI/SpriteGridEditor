@@ -110,6 +110,30 @@ Turns a color outfit sheet into a **gray sheet + index mask (`_M`)** for Unity's
 - Opening `X.png` also loads `X_M.png` from the same folder as the mask, if present.
 - Copy, paste, mirror and clear also handle the mask.
 
+## Mask brush · pair work · part references (stage 3)
+
+### Mask brush (left panel `Mask Brush`, menu `Tools → Mask Brush`)
+- Tools: **Select (V)** · **Pencil (P)** · **Fill (F)** · **Rectangle (R)** · **Eraser (E)**. Pick the region index with keys `1`-`4`. Brush size 1-15 px (square, for pixel art).
+- **Alpha protection**: indexes 1-4 can't be painted where alpha is 0. The eraser writes 0, so it works anywhere.
+- **Scope**: `Current cell` (where the stroke began) / `Selected cells (Source)` / `Whole sheet`. Pixels outside the scope are never touched.
+- While a tool is on, click/drag paints. **Alt+click = select Source**; Shift/Ctrl+click = Target as usual. The mask overlay turns on automatically with a tool.
+- One stroke / fill / rectangle = **one undo step**.
+- **Replace index**: change index A to B inside the scope at once (e.g. 2→3, missing 0→1).
+
+### Cell-to-cell mask copy
+- `Copy mask only to Target` (Ctrl+Alt+M): copies only the mask of the Source cell(s) to the Target position. **Artwork stays**, and pixels with no alpha become 0.
+- `Copy mask to whole row`: copies the first Source cell's mask to the other cells of the same row (frames of the same motion).
+
+### F/M pair work (`Tools → Start F/M pair work`)
+- For building one outfit for both female (F) and male (M) bodies. The current sheet + mask is duplicated as a **new document for the other body type** (`…F` → `…M`), and the original stays as a **read-only reference**. It is not an automatic conversion: you re-fit positions on the other body type's Base Body.
+- View: `Side by side` (reference canvas on the left, zoom/scroll synced) / `Overlay` (semi-transparent reference layer above the edit sheet).
+- Cross-gender paste warnings are skipped during pair work. If the other body's Base Body isn't found you're asked before starting: `Pick Body / Continue without Body / Cancel`. The mask overlay turns on at start so you can check edges that shifted with the new body type and fix them with the brush. `End pair work` closes the reference.
+- Sheets with body type Common (C) can't start pair work.
+
+### Part reference layers
+- Choose the **Editing part** (Outfit / Hair / …) in the right `Layers` panel; reference parts are placed above/below the edit sheet by the CHR-ART.5 §7 compositing order (Body → Eyes → Outfit → Hair → Helmet → Weapon). The part is guessed from the file name, defaulting to Outfit.
+- `Auto-load part references` loads, from `Allies/<part>/`, the files matching body type and motion, following the real naming: **Hair loads `HairC01` (F) / `HairC17` (M)** (body type is by number: C01-16 F, C17-24 M), **Eyes loads `EyesC01_E1_H1WK_Open`**, other parts only **when there is a single candidate** (use `Add` for any other file). Max 6 reference layers including Body; eye, opacity and position are per layer.
+
 ## Sheet specs (columns × rows)
 
 - Pick from the toolbar's `Sheet spec ▼`: `H1 Walk — 3 cols × 4 rows (cell 100×135)`, `H2 Combat — 6 cols × 5 rows (cell 256×256)` or `Custom...`.
@@ -142,9 +166,9 @@ Turns a color outfit sheet into a **gray sheet + index mask (`_M`)** for Unity's
 
 ## Preferences
 
-`Settings → Preferences`: language (한국어 / English), theme (dark / light / orange / midnight blue / forest green / high contrast), grid color and thickness, save folder, alpha threshold, transparent pixel RGB, sheet spec presets, Base Body folder, autosave.
+`Settings → Preferences`: language (한국어 / English), theme (dark / light / orange / midnight blue / forest green / high contrast), grid color and thickness, save folder, alpha threshold, transparent pixel RGB, sheet spec presets, Base Body folder, Allies folder (part references), pair-work overlay opacity, autosave.
 Every value is saved to `config.json` as soon as you change it.
 
 ## Coming next (roadmap)
 
-- v0.3.0: mask boundary brushes, F/M pair mode
+- v0.4.0+: stronger file-name validation, batch conversion, mirror-exclusion areas, `.meta` duplication review

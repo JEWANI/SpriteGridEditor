@@ -287,7 +287,39 @@ class SettingsDialog(QDialog, Translatable):
         hint.setObjectName("DimLabel")
         self._t(hint.setText, "settings.body_dir_hint")
         form.addRow(hint)
+        # 3단계: 파츠(Eyes/Hair/…) 참조를 찾을 Allies 폴더, 쌍 작업 겹쳐보기 불투명도
+        self.ed_allies_dir = QLineEdit(self.config.get("allies_dir", ""))
+        self.ed_allies_dir.editingFinished.connect(self._commit_allies_dir)
+        btn2 = QPushButton()
+        self._t(btn2.setText, "btn.browse")
+        btn2.clicked.connect(self._browse_allies_dir)
+        row2 = QHBoxLayout()
+        row2.addWidget(self.ed_allies_dir, stretch=1)
+        row2.addWidget(btn2)
+        form.addRow(self._label("settings.allies_dir"), row2)
+        hint2 = QLabel()
+        hint2.setWordWrap(True)
+        hint2.setObjectName("DimLabel")
+        self._t(hint2.setText, "settings.allies_dir_hint")
+        form.addRow(hint2)
+        self.sp_pair_opacity = QSpinBox()
+        self.sp_pair_opacity.setRange(5, 100)
+        self.sp_pair_opacity.setSuffix(" %")
+        self.sp_pair_opacity.setValue(int(self.config.get("pair.overlay_opacity", 40)))
+        self.sp_pair_opacity.valueChanged.connect(lambda v: self.config.set("pair.overlay_opacity", int(v)))
+        form.addRow(self._label("settings.pair_opacity"), self.sp_pair_opacity)
         return w
+
+    def _commit_allies_dir(self) -> None:
+        self.config.set("allies_dir", self.ed_allies_dir.text().strip())
+        self.settingsChanged.emit()
+
+    def _browse_allies_dir(self) -> None:
+        start = self.ed_allies_dir.text().strip() or os.path.expanduser("~")
+        folder = QFileDialog.getExistingDirectory(self, tr("settings.allies_dir"), start)
+        if folder:
+            self.ed_allies_dir.setText(os.path.normpath(folder))
+            self._commit_allies_dir()
 
     def _commit_body_dir(self) -> None:
         self.config.set("body_dir", self.ed_body_dir.text().strip())

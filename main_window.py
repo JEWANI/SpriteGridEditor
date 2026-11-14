@@ -21,7 +21,7 @@ from PIL import Image
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QColor, QImage, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QListWidget,
+    QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QListWidget,
     QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox, QSplitter, QStatusBar,
     QToolBar, QToolButton, QVBoxLayout, QWidget,
 )
@@ -30,6 +30,8 @@ import cell_ops
 import export_utils
 import import_utils
 import mask_convert as mc
+import mask_tools
+import pair_mode
 import reference_layers
 from about_dialog import AboutDialog
 from app_info import APP_NAME, APP_VERSION
@@ -39,7 +41,8 @@ from canvas_widget import (
 )
 from config_manager import ConfigManager
 from layer_model import (
-    KIND_BODY, KIND_EXTRA, MAX_EXTRA_LAYERS, MAX_REFERENCE_LAYERS, RefLayer, can_add_extra,
+    KIND_BODY, KIND_EXTRA, KIND_PAIR, MAX_EXTRA_LAYERS, MAX_REFERENCE_LAYERS, PARTS, RefLayer, apply_part_order,
+    can_add_extra, part_is_above, sort_for_paint,
 )
 from help_dialog import KIND_CHANGELOG, KIND_HELP, HelpDialog
 from color_widgets import FourColorEdit, colors_from_config, colors_to_config
@@ -102,6 +105,16 @@ class MainWindow(QMainWindow, Translatable):
         self.body_layer.clamp()
         self.extra_layers: list[RefLayer] = []
         self._layer_uid = 0
+        self.edit_part = "Outfit"  # 편집 중인 시트가 어느 파츠인지 (§7 합성 순서의 기준)
+        # 3단계: 마스크 도구 / F·M 쌍 작업
+        self.paint_tool: str | None = None
+        self.paint_index = 1
+        self._stroke: dict | None = None
+        self._mv_display = None
+        self._mv_overlay = None
+        self.pair: pair_mode.PairReference | None = None
+        self.pair_layer: RefLayer | None = None
+        self._pair_syncing = False
         self._last_msg = ("status.ready", {}, "info")
         self._last_autosave_marker = None
 
@@ -202,6 +215,33 @@ class MainWindow(QMainWindow, Translatable):
                                 ("act.nudge_up5", 0, -5, "Alt+Shift+Up"),
                                 ("act.nudge_down5", 0, 5, "Alt+Shift+Down")):
             self.nudge_actions.append(a(key, lambda dx=dx, dy=dy: self.nudge(dx, dy), sc))
+        # 3단계: 마스크 보정 도구 / 셀 간 마스크 복사 / 쌍 작업 / 참조 파츠
+        self.tool_actions: dict[str | None, QAction] = {}
+        self.tool_group = QActionGroup(self)
+        self.tool_group.setExclusive(True)
+        for tool, key, sc in ((None, "tool.select", "V"), (mask_tools.TOOL_PENCIL, "tool.pencil", "P"),
+                              (mask_tools.TOOL_FILL, "tool.fill", "F"), (mask_tools.TOOL_RECT, "tool.rect", "R"),
+                              (mask_tools.TOOL_ERASER, "tool.eraser", "E")):
+            act = a(key, lambda tool=tool: self._set_paint_tool(tool), sc)
+            act.setCheckable(True)
+            self.tool_group.addAction(act)
+            self.tool_actions[tool] = act
+        self.tool_actions[None].setChecked(True)
+        self.index_actions: dict[int, QAction] = {}
+        self.index_group = QActionGroup(self)
+        self.index_group.setExclusive(True)
+        for n in (1, 2, 3, 4):
+            act = a(f"tool.index{n}", lambda n=n: self._set_paint_index(n), str(n))
+            act.setCheckable(True)
+            self.index_group.addAction(act)
+            self.index_actions[n] = act
+        self.index_actions[1].setChecked(True)
+        self.a_mask_replace = a("act.mask_replace", self.replace_region)
+        self.a_mask_copy_target = a("act.mask_copy_target", self.mask_copy_to_target, "Ctrl+Alt+M")
+        self.a_mask_copy_row = a("act.mask_copy_row", self.mask_copy_to_row)
+        self.a_pair_start = a("act.pair_start", self.start_pair)
+        self.a_pair_end = a("act.pair_end", self.end_pair)
+        self.a_part_auto = a("act.part_auto", self.auto_load_parts)
         self.a_settings = a("act.settings", self.open_settings, "Ctrl+,")
         self.a_help = a("act.help", lambda: self._show_help(KIND_HELP), "F1")
         self.a_changelog = a("act.changelog", lambda: self._show_help(KIND_CHANGELOG))
@@ -259,6 +299,21 @@ class MainWindow(QMainWindow, Translatable):
         self.m_tools.addAction(self.a_import_adjust)
         self.m_tools.addAction(self.a_convert)
         self.m_tools.addAction(self.a_remove_mask)
+        self.m_tools.addSeparator()
+        self.m_maskedit = self.m_tools.addMenu("")
+        self._t(self.m_maskedit.setTitle, "menu.maskedit")
+        for tool in (None, mask_tools.TOOL_PENCIL, mask_tools.TOOL_FILL, mask_tools.TOOL_RECT,
+                     mask_tools.TOOL_ERASER):
+            self.m_maskedit.addAction(self.tool_actions[tool])
+        self.m_maskedit.addSeparator()
+        for n in (1, 2, 3, 4):
+            self.m_maskedit.addAction(self.index_actions[n])
+        self.m_maskedit.addSeparator()
+        for act in (self.a_mask_replace, self.a_mask_copy_target, self.a_mask_copy_row):
+            self.m_maskedit.addAction(act)
+        self.m_tools.addAction(self.a_pair_start)
+        self.m_tools.addAction(self.a_pair_end)
+        self.m_tools.addAction(self.a_part_auto)
         self.m_tools.addSeparator()
         self.m_tools.addAction(self.a_spec_custom)
         self.m_tools.addAction(self.a_pick_body)
@@ -354,7 +409,33 @@ class MainWindow(QMainWindow, Translatable):
         clay.setContentsMargins(0, 0, 0, 0)
         clay.setSpacing(0)
         clay.addWidget(self.lb_layerbar)
-        clay.addWidget(self.canvas, stretch=1)
+        # 3단계: F/M 쌍 작업 — 읽기 전용 참조 캔버스를 왼쪽에 나란히 둔다 (평소엔 숨김)
+        self.pair_canvas = CanvasWidget()
+        self.pair_canvas.set_readonly(True)
+        self.pair_canvas.zoomChanged.connect(self._on_pair_zoom)
+        self.pair_box = QWidget()
+        pbl = QVBoxLayout(self.pair_box)
+        pbl.setContentsMargins(0, 0, 0, 0)
+        pbl.setSpacing(0)
+        self.lb_pair_title = QLabel()
+        self.lb_pair_title.setObjectName("LayerBar")
+        pbl.addWidget(self.lb_pair_title)
+        pbl.addWidget(self.pair_canvas, stretch=1)
+        self.pair_box.hide()
+        self.canvas_split = QSplitter(Qt.Horizontal)
+        self.canvas_split.addWidget(self.pair_box)
+        self.canvas_split.addWidget(self.canvas)
+        self.canvas_split.setStretchFactor(0, 1)
+        self.canvas_split.setStretchFactor(1, 1)
+        self.canvas_split.setCollapsible(1, False)
+        for sb_a, sb_b, kind in ((self.canvas.horizontalScrollBar(), self.pair_canvas.horizontalScrollBar(), "h"),
+                                 (self.canvas.verticalScrollBar(), self.pair_canvas.verticalScrollBar(), "v")):
+            sb_a.valueChanged.connect(lambda v, sb=sb_b: self._mirror_scroll(sb, v))
+            sb_b.valueChanged.connect(lambda v, sb=sb_a: self._mirror_scroll(sb, v))
+        self.canvas.paintPressed.connect(self._on_paint_pressed)
+        self.canvas.paintMoved.connect(self._on_paint_moved)
+        self.canvas.paintReleased.connect(self._on_paint_released)
+        clay.addWidget(self.canvas_split, stretch=1)
         splitter.addWidget(center)
         splitter.addWidget(self._build_right_panel())
         splitter.setStretchFactor(0, 0)
@@ -427,6 +508,8 @@ class MainWindow(QMainWindow, Translatable):
         lay.addWidget(btn_open)
         layout.addWidget(gb_export)
         layout.addWidget(self._build_outfit_group())
+        layout.addWidget(self._build_maskedit_group())
+        layout.addWidget(self._build_pair_group())
 
         layout.addStretch(1)
         return panel
@@ -492,6 +575,468 @@ class MainWindow(QMainWindow, Translatable):
             b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             lay.addWidget(b)
         return gb
+
+    # ================================================================== #
+    #  3단계: 마스크 경계 보정 / 셀 간 마스크 복사 (§4.3-3)                 #
+    # ================================================================== #
+    def _build_maskedit_group(self) -> QGroupBox:
+        gb, lay = self._group("panel.maskedit")
+        hint = QLabel()
+        hint.setWordWrap(True)
+        hint.setObjectName("DimLabel")
+        self._t(hint.setText, "panel.maskedit_hint")
+        lay.addWidget(hint)
+
+        grid = QGridLayout()
+        for i, tool in enumerate((None, mask_tools.TOOL_PENCIL, mask_tools.TOOL_FILL,
+                                  mask_tools.TOOL_RECT, mask_tools.TOOL_ERASER)):
+            b = QToolButton()
+            b.setDefaultAction(self.tool_actions[tool])
+            b.setToolButtonStyle(Qt.ToolButtonTextOnly)
+            b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            grid.addWidget(b, i // 3, i % 3)
+        lay.addLayout(grid)
+
+        irow = QHBoxLayout()
+        lb = QLabel()
+        self._t(lb.setText, "panel.index")
+        irow.addWidget(lb)
+        for n in (1, 2, 3, 4):
+            b = QToolButton()
+            b.setDefaultAction(self.index_actions[n])
+            b.setToolButtonStyle(Qt.ToolButtonTextOnly)
+            irow.addWidget(b)
+        lay.addLayout(irow)
+
+        brow = QHBoxLayout()
+        lb = QLabel()
+        self._t(lb.setText, "panel.brush_size")
+        brow.addWidget(lb)
+        self.sp_brush = QSpinBox()
+        self.sp_brush.setRange(1, mask_tools.MAX_BRUSH)
+        self.sp_brush.setValue(int(self.config.get("mask_edit.brush", 1)))
+        self.sp_brush.valueChanged.connect(self._on_brush_size)
+        brow.addWidget(self.sp_brush, 1)
+        lay.addLayout(brow)
+
+        srow = QHBoxLayout()
+        lb = QLabel()
+        self._t(lb.setText, "panel.scope")
+        srow.addWidget(lb)
+        self.cb_scope = QComboBox()
+        self.cb_scope.activated.connect(self._on_scope_activated)
+        srow.addWidget(self.cb_scope, 1)
+        lay.addLayout(srow)
+
+        rrow = QHBoxLayout()
+        lb = QLabel()
+        self._t(lb.setText, "panel.replace")
+        rrow.addWidget(lb)
+        self.cb_rep_from, self.cb_rep_to = QComboBox(), QComboBox()
+        for cb in (self.cb_rep_from, self.cb_rep_to):
+            for n in range(mask_tools.MAX_INDEX + 1):
+                cb.addItem(str(n), n)
+        self.cb_rep_to.setCurrentIndex(1)
+        rrow.addWidget(self.cb_rep_from)
+        rrow.addWidget(QLabel("→"))
+        rrow.addWidget(self.cb_rep_to)
+        lay.addLayout(rrow)
+        for act in (self.a_mask_replace, self.a_mask_copy_target, self.a_mask_copy_row):
+            b = QToolButton()
+            b.setDefaultAction(act)
+            b.setToolButtonStyle(Qt.ToolButtonTextOnly)
+            b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            lay.addWidget(b)
+        return gb
+
+    def _fill_scope_combo(self) -> None:
+        cur = self.config.get("mask_edit.scope", mask_tools.SCOPE_CELL)
+        self.cb_scope.clear()
+        for sc, key in ((mask_tools.SCOPE_CELL, "panel.scope_cell"),
+                        (mask_tools.SCOPE_SELECTION, "panel.scope_selection"),
+                        (mask_tools.SCOPE_SHEET, "panel.scope_sheet")):
+            self.cb_scope.addItem(tr(key), sc)
+        self.cb_scope.setCurrentIndex(max(0, self.cb_scope.findData(cur)))
+
+    def _scope(self) -> str:
+        return self.cb_scope.currentData() or mask_tools.SCOPE_CELL
+
+    def _on_scope_activated(self, _i: int) -> None:
+        self.config.set("mask_edit.scope", self._scope())
+
+    def _on_brush_size(self, v: int) -> None:
+        self.config.set("mask_edit.brush", int(v))
+        self.canvas.set_brush_size(int(v))
+
+    def _set_paint_index(self, n: int) -> None:
+        self.paint_index = int(n)
+        act = self.index_actions.get(self.paint_index)
+        if act is not None and not act.isChecked():
+            act.setChecked(True)
+        # 번호를 고르면 연필로 바로 칠할 수 있게 (선택 모드·지우개에서 번호를 눌렀을 때)
+        if self.paint_tool in (None, mask_tools.TOOL_ERASER):
+            self._set_paint_tool(mask_tools.TOOL_PENCIL)
+
+    def _set_paint_tool(self, tool) -> None:
+        self._commit_stroke()
+        self.paint_tool = tool
+        act = self.tool_actions.get(tool)
+        if act is not None and not act.isChecked():
+            act.setChecked(True)
+        self.canvas.set_paint_tool(tool, self.sp_brush.value())
+        if tool is None:
+            return
+        if self.config.get("mask_view.mode", MASK_VIEW_OFF) == MASK_VIEW_OFF:
+            self._set_mask_view(MASK_VIEW_OVERLAY)  # 칠한 결과가 보여야 하므로 오버레이를 자동으로 켠다
+        m = self.model
+        if m is not None and not m.has_mask:
+            self._show_message("status.paint_need_mask", {}, "warn")
+        else:
+            self._show_message("status.mask_tool", {"tool": tr(f"tool.{tool}"), "index": self.paint_index})
+
+    def _update_maskedit_ui(self) -> None:
+        m = self.model
+        has = m is not None
+        has_mask = bool(has and m.has_mask)
+        src = self.canvas.source() if has else None
+        for act in self.tool_actions.values():
+            act.setEnabled(has)
+        for act in self.index_actions.values():
+            act.setEnabled(has)
+        for w in (self.sp_brush, self.cb_scope, self.cb_rep_from, self.cb_rep_to):
+            w.setEnabled(has)
+        self.a_mask_replace.setEnabled(has_mask)
+        self.a_mask_copy_target.setEnabled(has_mask and src is not None)
+        self.a_mask_copy_row.setEnabled(has_mask and src is not None)
+        self.a_pair_start.setEnabled(bool(has and pair_mode.can_start(m.gender)))
+        self.a_pair_end.setEnabled(self.pair is not None)
+        self.a_part_auto.setEnabled(has)
+        self.cb_pair_view.setEnabled(self.pair is not None)
+        if self.pair is not None:
+            self.lb_pair_state.setText(tr("panel.pair_on", name=self.pair.display_name, g=self.pair.gender))
+        else:
+            self.lb_pair_state.setText(tr("panel.pair_off"))
+
+    # -- 붓질 ---------------------------------------------------------------
+    def _paint_label(self, tool: str) -> str:
+        return {mask_tools.TOOL_PENCIL: "edit.paint", mask_tools.TOOL_FILL: "edit.fill",
+                mask_tools.TOOL_RECT: "edit.rect_fill", mask_tools.TOOL_ERASER: "edit.erase"}[tool]
+
+    def _on_paint_pressed(self, x: int, y: int) -> None:
+        self._commit_stroke()
+        m, tool = self.model, self.paint_tool
+        if m is None or tool is None:
+            return
+        if not m.has_mask:
+            self._show_message("status.paint_need_mask", {}, "warn")
+            return
+        g = m.grid
+        cell = (min(max(0, y // g.cell_h), g.rows - 1), min(max(0, x // g.cell_w), g.cols - 1))
+        bounds = mask_tools.scope_bounds(g, self._scope(), cell, self.canvas.source())
+        index = 0 if tool == mask_tools.TOOL_ERASER else self.paint_index
+        st = {"rec": mask_tools.MaskRecorder(m.arr, m.mask), "bounds": bounds, "index": index,
+              "tool": tool, "start": (x, y), "last": (x, y)}
+        self._stroke = st
+        alpha = m.arr[..., 3]
+        if tool in (mask_tools.TOOL_PENCIL, mask_tools.TOOL_ERASER):
+            d = mask_tools.stamp(m.mask, alpha, x, y, self.sp_brush.value(), index, bounds)
+        elif tool == mask_tools.TOOL_FILL:
+            d = mask_tools.flood_fill(m.mask, alpha, x, y, index, bounds)
+        else:
+            d = None  # 사각형은 놓을 때 한 번에 채운다
+        st["rec"].add(d)
+        self._patch_mask_view(d)
+
+    def _on_paint_moved(self, x: int, y: int) -> None:
+        st, m = self._stroke, self.model
+        if st is None or m is None or st["tool"] not in (mask_tools.TOOL_PENCIL, mask_tools.TOOL_ERASER):
+            return
+        d = mask_tools.stroke_line(m.mask, m.arr[..., 3], st["last"], (x, y), self.sp_brush.value(),
+                                   st["index"], st["bounds"])
+        st["last"] = (x, y)
+        st["rec"].add(d)
+        self._patch_mask_view(d)
+
+    def _on_paint_released(self, x: int, y: int) -> None:
+        st, m = self._stroke, self.model
+        if st is None or m is None:
+            return
+        if st["tool"] == mask_tools.TOOL_RECT:
+            d = mask_tools.fill_rect(m.mask, m.arr[..., 3], st["start"], (x, y), st["index"], st["bounds"])
+            st["rec"].add(d)
+        self._commit_stroke()
+
+    def _commit_stroke(self) -> None:
+        st, self._stroke = self._stroke, None
+        if st is None or self.model is None:
+            return
+        self._commit_mask_edit(st["rec"], self._paint_label(st["tool"]), "status.painted")
+
+    def _commit_mask_edit(self, rec, label: str, status_key: str, fmt: dict | None = None) -> bool:
+        edit = rec.finish(label)
+        if edit is None:
+            self._refresh_mask_view()  # 되돌려진 부분 없이 그림만 맞춘다
+            return False
+        edit.has_mask_before = edit.has_mask_after = True
+        self.model.history.do(self.model, edit)
+        self._after_edit(status_key, {"label": tr(label), **(fmt or {})})
+        return True
+
+    def replace_region(self) -> None:
+        m = self.model
+        if m is None or not m.has_mask:
+            self._show_message("status.need_mask", {}, "warn")
+            return
+        src = self.canvas.source()
+        cell = (src.r0, src.c0) if src else None
+        bounds = mask_tools.scope_bounds(m.grid, self._scope(), cell, src)
+        a, b = int(self.cb_rep_from.currentData()), int(self.cb_rep_to.currentData())
+        rec = mask_tools.MaskRecorder(m.arr, m.mask)
+        d, n = mask_tools.replace_index(m.mask, m.arr[..., 3], a, b, bounds)
+        rec.add(d)
+        if not self._commit_mask_edit(rec, "edit.replace_index", "status.replaced",
+                                      {"src": a, "dst": b, "n": n}):
+            self._show_message("status.replace_none", {"src": a}, "warn")
+
+    def _mask_copy(self, anchors: list[tuple[int, int]], block: np.ndarray) -> int:
+        m = self.model
+        rec = mask_tools.MaskRecorder(m.arr, m.mask)
+        for anchor in anchors:
+            rec.add(mask_tools.paste_mask_block(m.mask, m.arr[..., 3], m.grid, anchor, block))
+        return 1 if self._commit_mask_edit(rec, "edit.mask_copy", "status.mask_copied", {"n": len(anchors)}) else 0
+
+    def mask_copy_to_target(self) -> None:
+        """Source 셀의 마스크만 Target 셀로 복사한다 (그림은 그대로). 알파가 없는 곳은 0으로 둔다."""
+        m = self.model
+        if m is None or not m.has_mask:
+            self._show_message("status.need_mask", {}, "warn")
+            return
+        src, tgt = self.canvas.source(), self.canvas.target()
+        if src is None:
+            self._show_message("status.no_source", {}, "warn")
+            return
+        if tgt is None:
+            self._show_message("status.mask_copy_need_target", {}, "warn")
+            return
+        anchor = self._resolve_dest(src.shape)
+        if anchor is None:
+            return
+        block = cell_ops.copy_cells(m.mask, m.grid, src)
+        if not self._mask_copy([anchor], block):
+            self._show_message("status.mask_copy_none", {}, "warn")
+
+    def mask_copy_to_row(self) -> None:
+        """Source 첫 셀의 마스크를 같은 행의 다른 모든 셀로 복사한다."""
+        m = self.model
+        if m is None or not m.has_mask:
+            self._show_message("status.need_mask", {}, "warn")
+            return
+        src = self.canvas.source()
+        if src is None:
+            self._show_message("status.no_source", {}, "warn")
+            return
+        one = CellRect.single(src.r0, src.c0)
+        block = cell_ops.copy_cells(m.mask, m.grid, one)
+        anchors = [(src.r0, c) for c in range(m.grid.cols) if c != src.c0]
+        if not anchors or not self._mask_copy(anchors, block):
+            self._show_message("status.mask_copy_none", {}, "warn")
+
+    # ================================================================== #
+    #  3단계: F/M 쌍 작업 모드 (§4.5-1) / 파츠 참조 레이어 (§4.1)            #
+    # ================================================================== #
+    def _build_pair_group(self) -> QGroupBox:
+        gb, lay = self._group("panel.pair")
+        self.lb_pair_state = QLabel()
+        self.lb_pair_state.setWordWrap(True)
+        self.lb_pair_state.setObjectName("DimLabel")
+        lay.addWidget(self.lb_pair_state)
+        row = QHBoxLayout()
+        lb = QLabel()
+        self._t(lb.setText, "panel.pair_view")
+        row.addWidget(lb)
+        self.cb_pair_view = QComboBox()
+        self.cb_pair_view.activated.connect(self._on_pair_view_activated)
+        row.addWidget(self.cb_pair_view, 1)
+        lay.addLayout(row)
+        for act in (self.a_pair_start, self.a_pair_end):
+            b = QToolButton()
+            b.setDefaultAction(act)
+            b.setToolButtonStyle(Qt.ToolButtonTextOnly)
+            b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            lay.addWidget(b)
+        return gb
+
+    def _fill_pair_view_combo(self) -> None:
+        cur = self.config.get("pair.view", pair_mode.VIEW_SIDE)
+        self.cb_pair_view.clear()
+        self.cb_pair_view.addItem(tr("panel.pair_view_side"), pair_mode.VIEW_SIDE)
+        self.cb_pair_view.addItem(tr("panel.pair_view_overlay"), pair_mode.VIEW_OVERLAY)
+        self.cb_pair_view.setCurrentIndex(max(0, self.cb_pair_view.findData(cur)))
+
+    def _on_pair_view_activated(self, _i: int) -> None:
+        self.config.set("pair.view", self.cb_pair_view.currentData() or pair_mode.VIEW_SIDE)
+        self._apply_pair_view()
+
+    def _refresh_pair_title(self) -> None:
+        if self.pair is not None:
+            self.lb_pair_title.setText(tr("layerbar.pair", name=self.pair.display_name))
+
+    def _mirror_scroll(self, dst_bar, value: int) -> None:
+        if self.pair is None or self._pair_syncing:
+            return
+        self._pair_syncing = True
+        try:
+            dst_bar.setValue(value)
+        finally:
+            self._pair_syncing = False
+
+    def _on_pair_zoom(self, zoom: int) -> None:
+        if self.pair is None or self._pair_syncing:
+            return
+        self._pair_syncing = True
+        try:
+            self.canvas.set_zoom(zoom)
+        finally:
+            self._pair_syncing = False
+
+    def start_pair(self) -> None:
+        """현재 시트·마스크를 반대 체형 새 문서로 복제하고, 원본은 읽기 전용 참조로 남긴다."""
+        m = self.model
+        if m is None:
+            return
+        other = pair_mode.other_gender(m.gender)
+        if other is None:
+            self._show_message("status.pair_need_gender", {}, "warn")
+            return
+        # 반대 체형 Base Body가 없으면 시작 전에 경고하고, 직접 지정 / 그냥 진행 / 취소를 고르게 한다 (기획서 §4.5-1)
+        body_pick = ""
+        motion = (self._current_preset() or {}).get("body_motion", "")
+        if motion:
+            found, expected = reference_layers.find_body(self.config.get("body_dir", ""), other, m.skin, motion)
+            if found is None:
+                choice, body_pick = self._ask_pair_body(expected)
+                if choice == "cancel":
+                    return
+        if not self._confirm_discard():
+            return
+        base = m.name or "Sheet"
+        ref = pair_mode.PairReference(m.arr.copy(), m.mask.copy(), bool(m.has_mask), m.grid, base, m.gender)
+        new = SheetModel(m.arr.copy(), m.grid, m.preset_id, pair_mode.counterpart_name(base, other), "")
+        new.gender, new.skin = other, m.skin
+        if m.has_mask:
+            new.set_mask(m.mask.copy())
+        new.forced_dirty = True  # 새 문서 — 저장하기 전까지 수정됨
+        self._set_model(new, keep_pair=True)
+        if body_pick:
+            self.body_override = body_pick
+            self._refresh_body()
+        self._enter_pair(ref)
+        if new.has_mask and self.config.get("mask_view.mode", MASK_VIEW_OFF) == MASK_VIEW_OFF:
+            self._set_mask_view(MASK_VIEW_OVERLAY)  # 체형이 다르면 마스크 경계가 어긋나므로 바로 확인할 수 있게
+        if self.body_layer.image is None:
+            self._show_message("status.pair_need_body", {"name": new.display_name}, "warn")
+        else:
+            self.body_layer.visible = True  # 반대 체형 Body 위에서 위치를 다시 맞추는 작업이므로 바로 보여 준다
+            self.config.set("body_visible", True)
+            self._push_layers()
+            self._show_message("status.pair_started" if not new.has_mask else "status.pair_started_mask",
+                               {"ref": ref.display_name, "name": new.display_name})
+
+    def _ask_pair_body(self, expected: str) -> tuple[str, str]:
+        """반대 체형 Body가 없을 때 묻는다. 반환: ("pick", 경로) / ("go", "") / ("cancel", "")."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle(tr("dlg.pair_body.title"))
+        box.setText(tr("dlg.pair_body.msg", name=expected))
+        b_pick = box.addButton(tr("dlg.pair_body.pick"), QMessageBox.AcceptRole)
+        b_go = box.addButton(tr("dlg.pair_body.go"), QMessageBox.DestructiveRole)
+        b_cancel = box.addButton(tr("dlg.pair_body.cancel"), QMessageBox.RejectRole)
+        box.setDefaultButton(b_pick)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is b_pick:
+            start = self.config.get("body_dir", "") or os.path.expanduser("~")
+            path, _ = QFileDialog.getOpenFileName(self, tr("act.pick_body"), start, "PNG (*.png)")
+            return ("pick", path) if path else ("cancel", "")
+        if clicked is b_go:
+            return "go", ""
+        return "cancel", ""
+
+    def _enter_pair(self, ref: pair_mode.PairReference) -> None:
+        self.pair = ref
+        rm = SheetModel(ref.arr.copy(), ref.grid, "custom", ref.name, "")
+        rm.gender = ref.gender
+        self.pair_canvas.set_model(rm)
+        self.pair_canvas.set_source(None)
+        h, w = ref.arr.shape[:2]
+        img = QImage(ref.arr.data, w, h, w * 4, QImage.Format_RGBA8888).copy()
+        self.pair_layer = RefLayer(name=ref.display_name, image=img, kind=KIND_PAIR, visible=True,
+                                   opacity=int(self.config.get("pair.overlay_opacity", 40)),
+                                   above=True, uid=-1)
+        self._refresh_pair_title()
+        self._apply_pair_view()
+
+    def _apply_pair_view(self) -> None:
+        side = self.pair is not None and self.config.get("pair.view", pair_mode.VIEW_SIDE) == pair_mode.VIEW_SIDE
+        self.pair_box.setVisible(side)
+        if side:
+            self.canvas_split.setSizes([500, 500])
+            self._pair_syncing = True
+            try:
+                self.pair_canvas.set_zoom(self.canvas.zoom())
+                self.pair_canvas.horizontalScrollBar().setValue(self.canvas.horizontalScrollBar().value())
+                self.pair_canvas.verticalScrollBar().setValue(self.canvas.verticalScrollBar().value())
+            finally:
+                self._pair_syncing = False
+        self._push_layers()
+        self._update_actions()
+
+    def _clear_pair(self) -> None:
+        if self.pair is None and self.pair_layer is None:
+            return
+        self.pair = None
+        self.pair_layer = None
+        self.pair_box.hide()
+        self.pair_canvas.set_model(None)
+        self._push_layers()
+        self._update_actions()
+
+    def end_pair(self) -> None:
+        if self.pair is None:
+            return
+        self._clear_pair()
+        self._show_message("status.pair_ended")
+
+    def _on_edit_part(self, _i: int) -> None:
+        self.edit_part = self.cb_edit_part.currentData() or "Outfit"
+        apply_part_order(self.extra_layers, self.edit_part)
+        self._push_layers()
+        self._show_message("status.edit_part", {"part": self.edit_part})
+
+    def auto_load_parts(self) -> None:
+        """Allies/<파츠>/ 폴더에서 편집 시트와 체형·모션이 맞는 파츠를 참조 레이어로 불러온다 (Hair·Eyes는 기본값, 그 밖엔 후보가 하나일 때)."""
+        m = self.model
+        if m is None:
+            return
+        allies = reference_layers.allies_dir_from(self.config.get("body_dir", ""), self.config.get("allies_dir", ""))
+        motion = (self._current_preset() or {}).get("body_motion", "")
+        have = {os.path.normcase(os.path.normpath(r.path)) for r in self.extra_layers if r.path}
+        loaded = 0
+        for part in PARTS:
+            if part in ("Body", self.edit_part):
+                continue
+            path = reference_layers.auto_part_file(allies, part, m.gender, motion, m.skin)
+            if not path or os.path.normcase(os.path.normpath(path)) in have:
+                continue
+            if not can_add_extra(len(self.extra_layers)):
+                self._show_message("status.layer_limit", {"max": MAX_REFERENCE_LAYERS}, "warn")
+                return
+            if self.add_reference_layer(path, part=part):
+                loaded += 1
+        if loaded:
+            self._show_message("status.parts_loaded", {"n": loaded})
+        else:
+            self._show_message("status.parts_none", {"dir": allies or "-"}, "warn")
 
     def _build_right_panel(self) -> QWidget:
         panel = QWidget()
@@ -568,8 +1113,11 @@ class MainWindow(QMainWindow, Translatable):
         self._fill_preset_combo()
         self._fill_save_dir_combo()
         self._fill_mask_view_combo()
+        self._fill_scope_combo()
+        self._fill_pair_view_combo()
         self._sync_panel_from_config()
         self._refresh_body()
+        self._refresh_pair_title()
         self._update_all()
 
     def _update_all(self) -> None:
@@ -636,6 +1184,7 @@ class MainWindow(QMainWindow, Translatable):
         self.cb_preset.setEnabled(has)
         self.cb_gender.setEnabled(has)
         self.cb_skin.setEnabled(has)
+        self._update_maskedit_ui()
 
     def _update_grid_label(self) -> None:
         m = self.model
@@ -741,6 +1290,7 @@ class MainWindow(QMainWindow, Translatable):
         if app is not None:
             app.setStyleSheet(get_stylesheet(theme))
         self.canvas.set_theme(theme)
+        self.pair_canvas.set_theme(theme)
         if hasattr(self, "list_layers"):
             self._rebuild_layer_list()
 
@@ -751,13 +1301,19 @@ class MainWindow(QMainWindow, Translatable):
         mode = self.config.get("background_mode", BG_CHECKER)
         self.canvas.set_background(mode if mode in BACKGROUND_MODES else BG_CHECKER)
         self.canvas.set_reference_tint(bool(self.config.get("reference_tint", True)))
+        pc = self.pair_canvas
+        pc.set_grid_style(self.config.get("grid.color", "#00e5ff"), int(self.config.get("grid.width", 1)))
+        pc.set_show_grid(self.a_grid.isChecked())
+        pc.set_background(mode if mode in BACKGROUND_MODES else BG_CHECKER)
 
     def _on_grid_toggled(self, checked: bool) -> None:
         self.canvas.set_show_grid(checked)
+        self.pair_canvas.set_show_grid(checked)
         self.config.set("grid.show", bool(checked))
 
     def _set_background(self, mode: str) -> None:
         self.canvas.set_background(mode)
+        self.pair_canvas.set_background(mode)
         self.config.set("background_mode", mode)
         self._fill_bg_combo()
 
@@ -778,6 +1334,12 @@ class MainWindow(QMainWindow, Translatable):
         self.cb_zoom.blockSignals(False)
         self.config.set("zoom_percent", int(zoom))
         self._update_status_labels()
+        if self.pair is not None and not self._pair_syncing:
+            self._pair_syncing = True
+            try:
+                self.pair_canvas.set_zoom(zoom)
+            finally:
+                self._pair_syncing = False
 
     def _on_selection_changed(self) -> None:
         self._update_selection_status()
@@ -910,6 +1472,23 @@ class MainWindow(QMainWindow, Translatable):
         brow.addWidget(self.btn_layer_remove)
         lay.addLayout(brow)
 
+        prow = QHBoxLayout()
+        lb_part = QLabel()
+        self._t(lb_part.setText, "panel.edit_part")
+        prow.addWidget(lb_part)
+        self.cb_edit_part = QComboBox()
+        for part in PARTS:
+            self.cb_edit_part.addItem(part, part)
+        self.cb_edit_part.setCurrentIndex(self.cb_edit_part.findData(self.edit_part))
+        self.cb_edit_part.activated.connect(self._on_edit_part)
+        prow.addWidget(self.cb_edit_part, 1)
+        lay.addLayout(prow)
+        btn_parts = QToolButton()
+        btn_parts.setDefaultAction(self.a_part_auto)
+        btn_parts.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        btn_parts.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        lay.addWidget(btn_parts)
+
         self.cb_ref_tint = QCheckBox()
         self._t(self.cb_ref_tint.setText, "layer.tint")
         self.cb_ref_tint.setChecked(bool(self.config.get("reference_tint", True)))
@@ -923,9 +1502,17 @@ class MainWindow(QMainWindow, Translatable):
         lay.addWidget(hint)
         return gb
 
+    def _pair_overlay_layer(self) -> RefLayer | None:
+        if self.pair is not None and self.pair_layer is not None \
+                and self.config.get("pair.view", pair_mode.VIEW_SIDE) == pair_mode.VIEW_OVERLAY:
+            return self.pair_layer
+        return None
+
     def _all_refs(self) -> list[RefLayer]:
         refs = [self.body_layer] if self.body_layer.image is not None else []
-        return refs + self.extra_layers
+        refs = sort_for_paint(refs + self.extra_layers)
+        pl = self._pair_overlay_layer()
+        return refs + ([pl] if pl is not None else [])
 
     def _push_layers(self) -> None:
         """레이어 상태를 캔버스·목록·레이어 바에 반영."""
@@ -936,6 +1523,8 @@ class MainWindow(QMainWindow, Translatable):
     def _layer_by_uid(self, uid) -> RefLayer | None:
         if uid == 0:
             return self.body_layer
+        if self.pair_layer is not None and uid == self.pair_layer.uid:
+            return self.pair_layer
         return next((r for r in self.extra_layers if r.uid == uid), None)
 
     def _rebuild_layer_list(self, select=None) -> None:
@@ -943,7 +1532,9 @@ class MainWindow(QMainWindow, Translatable):
         lst = self.list_layers
         lst.blockSignals(True)
         lst.clear()
-        refs = [self.body_layer] + self.extra_layers
+        refs = sort_for_paint([self.body_layer] + self.extra_layers)
+        if self._pair_overlay_layer() is not None:
+            refs.append(self.pair_layer)
         above = [r for r in refs if r.above and (r.image is not None)]
         below = [r for r in refs if not r.above]
         order: list = [("ref", r) for r in reversed(above)] + [("edit", None)] + \
@@ -1078,7 +1669,7 @@ class MainWindow(QMainWindow, Translatable):
         for path in paths:
             self.add_reference_layer(path)
 
-    def add_reference_layer(self, path: str) -> bool:
+    def add_reference_layer(self, path: str, part: str = "") -> bool:
         """PNG를 참조 레이어로 추가. 한도(Body 포함 6개)를 넘으면 False."""
         if not can_add_extra(len(self.extra_layers)):
             self._show_message("status.layer_limit", {"max": MAX_REFERENCE_LAYERS}, "warn")
@@ -1091,8 +1682,10 @@ class MainWindow(QMainWindow, Translatable):
         h, w = arr.shape[:2]
         img = QImage(arr.data, w, h, w * 4, QImage.Format_RGBA8888).copy()
         self._layer_uid += 1
-        layer = RefLayer(name=os.path.basename(path), image=img, kind=KIND_EXTRA, path=path,
-                         visible=True, opacity=50, above=True, uid=self._layer_uid)
+        label = f"{part}: {os.path.basename(path)}" if part else os.path.basename(path)
+        above = part_is_above(part, self.edit_part) if part else True
+        layer = RefLayer(name=label, image=img, kind=KIND_EXTRA, path=path,
+                         visible=True, opacity=50, above=above, uid=self._layer_uid, part=part)
         self.extra_layers.append(layer)
         self._push_layers()
         self._rebuild_layer_list(select=layer.uid)
@@ -1328,8 +1921,14 @@ class MainWindow(QMainWindow, Translatable):
         self._show_message("status.adjusted_mask_dropped" if m.has_mask else "status.adjusted", {"w": w, "h": h},
                            "warn" if m.has_mask else "info")
 
-    def _set_model(self, model: SheetModel) -> None:
+    def _set_model(self, model: SheetModel, keep_pair: bool = False) -> None:
+        if not keep_pair:
+            self._clear_pair()
+        self._stroke = None
         self.model = model
+        self.edit_part = reference_layers.detect_part(model.name)
+        apply_part_order(self.extra_layers, self.edit_part)
+        self.cb_edit_part.setCurrentIndex(max(0, self.cb_edit_part.findData(self.edit_part)))
         self.body_override = ""
         self.autosaver.clear()  # 이전 문서의 자동 저장본은 필요 없다
         self._last_autosave_marker = None
@@ -1443,8 +2042,8 @@ class MainWindow(QMainWindow, Translatable):
                                 "mw": m.grid.cell_w, "mh": m.grid.cell_h}, "warn")
             return
         # 다른 체형으로 복사 금지 — 경고 (§3.1, CHR-ART.5 §5). 체형 공용은 제외.
-        if clip.gender in (GENDER_FEMALE, GENDER_MALE) and m.gender in (GENDER_FEMALE, GENDER_MALE) \
-                and clip.gender != m.gender:
+        if self.pair is None and clip.gender in (GENDER_FEMALE, GENDER_MALE) \
+                and m.gender in (GENDER_FEMALE, GENDER_MALE) and clip.gender != m.gender:
             answer = QMessageBox.warning(
                 self, tr("dlg.cross_gender.title"),
                 tr("dlg.cross_gender.msg", src=clip.gender, dst=m.gender),
@@ -1589,29 +2188,50 @@ class MainWindow(QMainWindow, Translatable):
         self.config.set("outfit_preview.gain", round(float(v), 2))
         self._refresh_mask_view()
 
+    def _build_mask_layers(self, arr: np.ndarray, mask: np.ndarray):
+        """(표시 그림, 오버레이) — 시트 전체든 일부 사각형이든 같은 식으로 만든다 (붓질 중 부분 갱신용)."""
+        opaque = arr[..., 3] > 0
+        mode = self.config.get("mask_view.mode", MASK_VIEW_OFF)
+        display = overlay = None
+        if mode == MASK_VIEW_ONLY:
+            display = mc.pseudo_color(mask, opaque)
+        elif self.a_tint_view.isChecked():
+            display = mc.tint(arr, mask, self.preview_colors.colors(), self.sp_gain.value())
+        if mode == MASK_VIEW_OVERLAY:
+            overlay = mc.pseudo_color(mask, opaque)
+        if self.a_missing.isChecked():
+            miss = mc.missing_overlay(mask, opaque)
+            overlay = miss if overlay is None else np.where(miss[..., 3:] > 0, miss, overlay)
+        return display, overlay
+
     def _refresh_mask_view(self) -> None:
         """캔버스 표시 전용 그림(색 미리보기 / 마스크만 / 오버레이 / 누락 강조)을 다시 만든다."""
         if not hasattr(self, "canvas"):
             return
         m = self.model
         if m is None or not m.has_mask:
+            self._mv_display = self._mv_overlay = None
             self.canvas.set_mask_view(None, None)
             return
-        opaque = m.arr[..., 3] > 0
+        display, overlay = self._build_mask_layers(m.arr, m.mask)
         mode = self.config.get("mask_view.mode", MASK_VIEW_OFF)
-        display = overlay = None
-        if mode == MASK_VIEW_ONLY:
-            display = mc.pseudo_color(m.mask, opaque)
-        elif self.a_tint_view.isChecked():
-            display = mc.tint(m.arr, m.mask, self.preview_colors.colors(), self.sp_gain.value())
-        if mode == MASK_VIEW_OVERLAY:
-            overlay = mc.pseudo_color(m.mask, opaque)
-        if self.a_missing.isChecked():
-            miss = mc.missing_overlay(m.mask, opaque)
-            overlay = miss if overlay is None else np.where(miss[..., 3:] > 0, miss, overlay)
         opacity = 100 if (overlay is not None and mode != MASK_VIEW_OVERLAY) else self.sl_mask_opacity.value()
-        self.canvas.set_mask_view(None if display is None else np.ascontiguousarray(display),
-                                  None if overlay is None else np.ascontiguousarray(overlay), opacity)
+        self._mv_display = None if display is None else np.ascontiguousarray(display)
+        self._mv_overlay = None if overlay is None else np.ascontiguousarray(overlay)
+        self.canvas.set_mask_view(self._mv_display, self._mv_overlay, opacity)
+
+    def _patch_mask_view(self, rect) -> None:
+        """붓질로 바뀐 사각형만 표시 그림에 반영 (전체를 다시 만들지 않는다). 그림 메모리를 직접 고친다."""
+        m = self.model
+        if rect is None or m is None or (self._mv_display is None and self._mv_overlay is None):
+            return
+        y0, y1, x0, x1 = rect
+        d, o = self._build_mask_layers(m.arr[y0:y1, x0:x1], m.mask[y0:y1, x0:x1])
+        if d is not None and self._mv_display is not None:
+            self._mv_display[y0:y1, x0:x1] = d
+        if o is not None and self._mv_overlay is not None:
+            self._mv_overlay[y0:y1, x0:x1] = o
+        self.canvas.viewport().update()
 
     # -- 비교 / 통계 ------------------------------------------------------
     def _compare_scope(self) -> tuple[np.ndarray, np.ndarray, str]:
