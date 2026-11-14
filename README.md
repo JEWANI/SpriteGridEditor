@@ -7,7 +7,7 @@
 기획서: 볼트 `에디터 툴 제작\EDT-ETC.6 스프라이트 시트 편집기 SpriteGrid Editor 기획서 v1.1.md`
 스택: Python 3 + PySide6(Qt) + Pillow + NumPy
 
-![SpriteGrid Editor 메인 화면 (H1 걷기 시트, Base Body 참조)](docs/images/main_ko.png)
+![SpriteGrid Editor v0.3.0 메인 화면 (H1 걷기 옷 시트 + Base Body 참조)](docs/images/main_ko.png)
 
 ## 📌 주요 기능 (V0.3.0)
 
