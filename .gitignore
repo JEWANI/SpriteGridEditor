@@ -38,3 +38,6 @@ venv/
 .idea/
 Thumbs.db
 desktop.ini
+
+# 배포 스테이징 폴더 (release/README.txt만 저장소에 둠)
+release/*/
