@@ -29,6 +29,7 @@
   README.txt                    이 파일 (빠른 시작)
   CHANGELOG.md                  버전별 업데이트 내역
   HELP_ko.md / HELP_en.md       사용법 (한국어 / English)
+  LICENSE                       MIT 라이선스 (PySide6 LGPL-3.0 · Pillow · NumPy 포함)
 
 ■ 업데이트
   이전 버전 폴더의 config.json을 새 버전 exe 옆에 복사하면 설정(저장 폴더·최근 파일·프리셋 등)이 이어집니다.
@@ -60,4 +61,4 @@ All editing, zooming and saving use nearest-neighbor only, so pixels never blur.
   Full guide: Help → Usage (F1) in the app, or HELP_en.md. Language: Settings → General → English.
 
 ■ Files
-  SpriteGridEditor v0.3.0.exe / README.txt / CHANGELOG.md (release notes) / HELP_ko.md, HELP_en.md (user guide)
+  SpriteGridEditor v0.3.0.exe / README.txt / CHANGELOG.md (release notes) / HELP_ko.md, HELP_en.md (user guide) / LICENSE (MIT)

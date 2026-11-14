@@ -151,3 +151,10 @@ SpriteGridEditor/
 
 ## 👤 만든이
 재와니
+
+---
+
+## 📄 라이선스
+[MIT License](./LICENSE) © 2026 재와니 (JEWANI)
+
+사용 라이브러리: [PySide6](https://doc.qt.io/qtforpython-6/) (LGPL-3.0) · [Pillow](https://python-pillow.org/) (MIT-CMU) · [NumPy](https://numpy.org/) (BSD-3-Clause) — 각 라이브러리의 라이선스를 따른다.
