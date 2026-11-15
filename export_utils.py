@@ -30,6 +30,8 @@ TRANSPARENT_EXTEND = "extend"
 # CHR-ART.5 §3.2: H1WK_{U/P/G/N/S}{번호3자리}{F/M} (체형 공용은 F/M 없음)
 NAME_KINDS = ("U", "P", "G", "N", "S")
 _NAME_RE = re.compile(r"^[A-Za-z0-9]+_([UPGNS])(\d{3})([FM])?$")
+# 구 방어구 시트처럼 종류 문자만 규칙 밖인 이름 (H1WK_C003 · H1WK_TC201 · H1WK_BU001F) — §3.2 "변환 대상"
+_LEGACY_RE = re.compile(r"^[A-Za-z0-9]+_([A-Za-z]{1,2})(\d{3})([FM])?$")
 
 
 # --------------------------------------------------------------------------- #
@@ -223,20 +225,51 @@ class Issue:
     fmt: dict
 
 
-def validate_name(stem: str, gender: str) -> list[Issue]:
-    """파일명 규칙·체형 접미사 검사. 모두 경고 (저장은 허용)."""
+def validate_name(stem: str, gender: str, motion: str = "", folder: str = "",
+                  has_mask: bool | None = None) -> list[Issue]:
+    """파일명 검사 (CHR-ART.5 §3.2). 모두 경고 — 저장은 허용.
+
+    - 규칙 형식 / 대소문자 / 구 종류 문자(C·T·B…) / 번호 000 / 체형 접미사
+    - motion: 시트 규격의 모션(H1WK·H2)과 접두사가 다르면 경고
+    - folder: 저장 폴더에 같은 ID의 공용↔체형별 파일이 함께 있거나, 마스크 없이 저장하는데
+      예전 ``_M.png`` 가 남아 있으면 경고 (has_mask=False 일 때)
+    """
     issues: list[Issue] = []
+    if re.search(r"_M$", stem):
+        issues.append(Issue("warn", "validate.name_mask_suffix", {"name": stem}))
     parsed = parse_name(stem)
     if parsed is None:
-        issues.append(Issue("warn", "validate.name_pattern", {"name": stem}))
+        upper = parse_name(stem.upper())
+        legacy = _LEGACY_RE.match(stem)
+        if upper is not None:
+            issues.append(Issue("warn", "validate.name_case", {"name": stem, "fixed": stem.upper()}))
+        elif legacy and legacy.group(1).upper() not in NAME_KINDS:
+            issues.append(Issue("warn", "validate.name_legacy_kind", {"kind": legacy.group(1)}))
+        else:
+            issues.append(Issue("warn", "validate.name_pattern", {"name": stem}))
         return issues
-    suffix = parsed[3]
+    prefix, kind, number, suffix = parsed
+    if number == 0:
+        issues.append(Issue("warn", "validate.name_number_zero", {}))
     if gender in ("F", "M"):
         if suffix != gender:
             issues.append(Issue("warn", "validate.gender_suffix",
                                 {"gender": gender, "suffix": suffix or "-"}))
     elif gender == GENDER_COMMON and suffix:
         issues.append(Issue("warn", "validate.common_has_suffix", {"suffix": suffix}))
+    if motion and prefix != motion:
+        issues.append(Issue("warn", "validate.name_motion", {"prefix": prefix, "motion": motion}))
+    if folder and os.path.isdir(folder):
+        base = f"{prefix}_{kind}{number:03d}"
+        if suffix:
+            if os.path.exists(os.path.join(folder, base + ".png")):
+                issues.append(Issue("warn", "validate.name_common_exists", {"name": base + ".png"}))
+        else:
+            found = [base + g + ".png" for g in ("F", "M") if os.path.exists(os.path.join(folder, base + g + ".png"))]
+            if found:
+                issues.append(Issue("warn", "validate.name_gendered_exists", {"names": ", ".join(found)}))
+        if has_mask is False and os.path.exists(os.path.join(folder, stem + "_M.png")):
+            issues.append(Issue("warn", "validate.name_stale_mask", {"name": stem + "_M.png"}))
     return issues
 
 

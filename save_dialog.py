@@ -29,10 +29,12 @@ _INVALID_CHARS = re.compile(r'[\\/:*?"<>|]')
 
 
 class SaveDialog(QDialog):
-    def __init__(self, config: ConfigManager, model: SheetModel, prefix_hint: str, parent=None):
+    def __init__(self, config: ConfigManager, model: SheetModel, prefix_hint: str, parent=None,
+                 motion: str = ""):
         super().__init__(parent)
         self.config = config
         self.model = model
+        self.motion = motion  # 시트 규격의 모션(H1WK·H2) — 접두사와 다르면 경고
         self.setWindowTitle(tr("dlg.save.title"))
         self.setMinimumWidth(520)
         self._result_path = ""
@@ -119,6 +121,7 @@ class SaveDialog(QDialog):
         self.sp_num.valueChanged.connect(self._compose)
         self.gb_helper.toggled.connect(self._compose)
         self.ed_name.textChanged.connect(self._validate)
+        self.cb_folder.currentTextChanged.connect(self._validate)
         self._compose()
 
     # -- 이름 조립 / 검증 ------------------------------------------------------
@@ -143,7 +146,9 @@ class SaveDialog(QDialog):
 
     def _validate(self, *_args) -> None:
         name = self._clean_name()
-        issues = export_utils.validate_name(name, self.model.gender) if name else []
+        folder = self.cb_folder.currentText().strip() if hasattr(self, "cb_folder") else ""
+        issues = export_utils.validate_name(name, self.model.gender, self.motion, folder,
+                                            self.model.has_mask) if name else []
         self.lb_warn.setText("\n".join("⚠ " + tr(i.key, **i.fmt) for i in issues))
         self.buttons.button(QDialogButtonBox.Ok).setEnabled(bool(name))
 

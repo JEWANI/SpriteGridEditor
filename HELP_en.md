@@ -34,7 +34,7 @@ Column headers read `C1 C2 C3` across the top and row headers `R1 R2 R3 R4` down
 | Copy / Cut | `Ctrl+C` / `Ctrl+X` | Put the Source area on the internal clipboard |
 | Paste | `Ctrl+V` | Overwrite at the **Target** (or the top-left of the Source if no Target) |
 | Paste Mirrored | `M` | Paste flipped horizontally |
-| Paste Flipped Vertically | (menu) | Paste flipped vertically |
+| Paste Flipped Vertically | `Shift+M` | Paste flipped vertically |
 | **Mirror & Apply** | `Ctrl+M` | Flip the Source and write it straight onto the Target |
 | Clear Cells | `Delete` | Reset the selected cells' RGBA to (0,0,0,0) |
 | Undo / Redo | `Ctrl+Z` / `Ctrl+Y` | Up to 100 steps |
@@ -42,7 +42,7 @@ Column headers read `C1 C2 C3` across the top and row headers `R1 R2 R3 R4` down
 - Selecting **several cells** (e.g. a whole row) copies, pastes, mirrors and clears them in one go.
 - Mirroring flips **each cell separately**: the cell order (frame order) stays the same and only each frame's picture is flipped.
 - If you set the Target as a **range**, its shape (rows × cols) must equal the copied area. Clicking a single Target cell just sets the start position.
-- **Asymmetric details** such as a hair parting or a weapon hand can be off after mirroring. Check with the Base Body overlay.
+- **Asymmetric details** such as a hair parting or a weapon hand can be off after mirroring. Check with the Base Body overlay and fix them by **double-clicking the cell to open the cell editor** (there is no option to exclude areas from mirroring).
 
 ## Common tasks
 
@@ -134,6 +134,39 @@ Turns a color outfit sheet into a **gray sheet + index mask (`_M`)** for Unity's
 - Choose the **Editing part** (Outfit / Hair / …) in the right `Layers` panel; reference parts are placed above/below the edit sheet by the CHR-ART.5 §7 compositing order (Body → Eyes → Outfit → Hair → Helmet → Weapon). The part is guessed from the file name, defaulting to Outfit.
 - `Auto-load part references` loads, from `Allies/<part>/`, the files matching body type and motion, following the real naming: **Hair loads `HairC01` (F) / `HairC17` (M)** (body type is by number: C01-16 F, C17-24 M), **Eyes loads `EyesC01_E1_H1WK_Open`**, other parts only **when there is a single candidate** (use `Add` for any other file). Max 6 reference layers including Body; eye, opacity and position are per layer.
 
+## Cell editor · Move area · Batch convert (stage 4)
+
+### Cell editor — erase dots and paint (`Edit → Cell Editor…`, Ctrl+E, double-click a cell)
+- Opens the selected cell (or **the whole selected range**) in a pop-up, magnified (800% by default, wheel to zoom). Base Body and reference layers for the same area are drawn below (or above) so you can paint against them.
+- **Only the area inside the thick border is edited**; the neighbor cells around it are shown semi-transparent, view-only (`Neighbors` checkbox / turn off or set opacity 10-90% in Preferences).
+- Tools: **B paint · E erase · I eyedropper**. While painting or erasing, **hold Alt for the eyedropper** (release to go back); Alt+click also picks. `[` `]` brush size, `X` swaps primary ↔ secondary color, click a color swatch to choose a color.
+- The cursor follows the tool — paint = brush-size square, erase = dashed square, eyedropper = pipette. The top line shows tool, size and color; the right side shows the coordinates and color under the mouse.
+- Paint is always opaque (alpha 255); erased pixels become transparent with mask 0. On sheets with a mask, **the eyedropper takes the mask index together with the color** and paints it too (or set `Mask index` directly).
+- Ctrl+Z / Ctrl+Y undo inside the window. **Apply (Ctrl+Enter)** closes it and writes to the sheet — in the main window **one undo** reverts everything done in the editor. `Cancel` / Esc discards (asks if anything changed).
+
+### Move area — move across cell borders (`Edit → Move Area`, S)
+- Drag on the canvas to select a **pixel rectangle**, then drag inside it to move. While dragging, the original spot is dimmed and the content is previewed at its new place.
+- Arrow keys 1px / Shift+arrows 5px, Esc clears the selection. Each move is one undo step.
+- The original spot is cleared to transparent and **only opaque pixels** are placed (transparent parts of the selection don't erase a neighboring frame). The mask moves too; anything pushed off the sheet is dropped. No resizing or rotation.
+
+### Batch convert a folder — many outfits at once (`Tools → Batch Convert Folder…`, Ctrl+Shift+B)
+- Converts the color sheets in an input folder **to gray + mask (`_M.png`) in one go** and saves them to an output folder. Same rules as the single conversion (color-based / horizontal split / gray only, despeckle, brightness normalize auto/on/off).
+- Pick files with the checkboxes. `_M.png` and `_backup.png` files are left out, and files whose size matches no sheet spec are skipped.
+- Color-based split assigns **regions automatically, most pixels first: 1 (main), 2 (secondary), 3, 4** — fix anything split differently with the mask brush.
+- The result column shows saved / warnings (file-name rule, missing regions, …) / skipped; hover for all notes. **Double-click a result row to open that file in the main window.**
+- Using the input folder as the output folder is blocked (it would overwrite the color originals). Save settings (alpha threshold, transparent RGB) come from Preferences.
+
+### Next / previous file in the folder (`File → Next File in Folder`, Ctrl+PgDn / Ctrl+PgUp)
+- Opens the next or previous PNG in the same folder as the current file (by name, masks and backups excluded) — handy for stepping through batch results one by one. Asks first if there are unsaved changes.
+
+### Unity `.meta` copy (`Preferences → Save`, on by default)
+- When saving **inside a Unity project's `Assets`** and the PNG has no `.meta` yet, the `.meta` of a **same-size sheet in the same folder is copied** — import settings such as Point filter, no compression and sprite slicing carry over.
+- guid follows the project rule `md5('S_unit_' + file name)`, sprites are renamed `newname_0…`, sprite IDs are rebuilt from the names (same values every time).
+- An existing `.meta` is never touched (overwriting keeps the guid). Without a same-size template nothing is copied and Unity creates defaults. Masks (`_M.png`) only use mask `.meta` files as templates.
+
+### Keyboard shortcuts (`Help → Keyboard Shortcuts`, Ctrl+/)
+- Lists the menu shortcuts **read live from the running menus**, plus canvas and cell-editor keys. The cell editor's B and E only work inside that window, so they don't clash with the main B (background cycle) and E (mask eraser).
+
 ## Sheet specs (columns × rows)
 
 - Pick from the toolbar's `Sheet spec ▼`: `H1 Walk — 3 cols × 4 rows (cell 100×135)`, `H2 Combat — 6 cols × 5 rows (cell 256×256)` or `Custom...`.
@@ -154,6 +187,7 @@ Turns a color outfit sheet into a **gray sheet + index mask (`_M`)** for Unity's
 - Only **PNG (RGBA)** is supported.
 - **Alpha threshold** (default 128): alpha below the threshold becomes 0, otherwise 255, which removes translucent fringes. Turn it off to keep the original alpha. Transparent pixels get RGB (0,0,0) by default.
 - **File name helper**: builds names like `H1WK_P001F` from `kind (U/P/G/N/S) + 3-digit number + body type`. Names that break the rule only produce a warning; saving is still allowed.
+- **File name checks** (warnings only): rule format, lower case, old kind letters (`C`, `TC`, `BU`, …), number 000, a trailing `_M` (looks like a mask), a prefix that differs from the sheet spec motion (`H1WK`, `H2`), common and body-specific files with the same ID in the save folder, and an old `_M.png` left behind when saving without a mask.
 - If the name already exists you are asked to confirm, and the previous file is kept as `<name>_backup.png`.
 - Without a configured save folder, files go to `output/` next to the program. Use `Preferences → Save` for any folder, the recent-folder list, and `Ask for the folder every time I save`.
 - A file you only opened is **never overwritten automatically**; the save dialog always opens on the first save.
@@ -166,9 +200,9 @@ Turns a color outfit sheet into a **gray sheet + index mask (`_M`)** for Unity's
 
 ## Preferences
 
-`Settings → Preferences`: language (한국어 / English), theme (dark / light / orange / midnight blue / forest green / high contrast), grid color and thickness, save folder, alpha threshold, transparent pixel RGB, sheet spec presets, Base Body folder, Allies folder (part references), pair-work overlay opacity, autosave.
+`Settings → Preferences`: language (한국어 / English), theme (dark / light / orange / midnight blue / forest green / high contrast), grid color and thickness, save folder, alpha threshold, transparent pixel RGB, sheet spec presets, Base Body folder, Allies folder (part references), pair-work overlay opacity, cell editor (neighbor display, opacity, default zoom), Unity `.meta` copy, autosave.
 Every value is saved to `config.json` as soon as you change it.
 
 ## Coming next (roadmap)
 
-- v0.4.0+: stronger file-name validation, batch conversion, mirror-exclusion areas, `.meta` duplication review
+- All four stages of the plan's roadmap are implemented. Next: tune values and defaults while making real outfits.

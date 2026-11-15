@@ -25,7 +25,7 @@ KEY_PATTERNS = [
     re.compile(r'\ba\(\s*"([A-Za-z0-9_.]+)"'),
     re.compile(r'\b_group\(\s*"([A-Za-z0-9_.]+)"'),
     re.compile(r'\b_label\(\s*"([A-Za-z0-9_.]+)"'),
-    re.compile(r'"((?:status|edit|dlg|settings|validate|panel|act|menu|tb|gender|preset|btn|theme|note|canvas|layer|layerbar)\.[A-Za-z0-9_.]+)"'),
+    re.compile(r'"((?:status|edit|dlg|settings|validate|panel|act|menu|tb|gender|preset|btn|theme|note|canvas|layer|layerbar|keys|batch)\.[A-Za-z0-9_.]+)"'),
 ]
 # 동적으로 조립되는 키 (f"bg.{mode}", f"note.{note}")
 DYNAMIC = ["bg.checker", "bg.white", "bg.black", "bg.dots",
@@ -38,7 +38,10 @@ DYNAMIC = ["bg.checker", "bg.white", "bg.black", "bg.dots",
            "dlg.save.kind_U", "dlg.save.kind_P", "dlg.save.kind_G", "dlg.save.kind_N", "dlg.save.kind_S",
            "dlg.save.gender_name_F", "dlg.save.gender_name_M", "dlg.save.gender_name_C",
            "tool.select", "tool.pencil", "tool.fill", "tool.rect", "tool.eraser",
+           "tool.move", "dlg.celledit.state_name_paint", "dlg.celledit.state_name_erase",
            "tool.index1", "tool.index2", "tool.index3", "tool.index4",
+           "dlg.batch.st_ok", "dlg.batch.st_warn", "dlg.batch.st_skip", "dlg.batch.st_error",
+           "dlg.batch.norm_auto", "dlg.batch.norm_on", "dlg.batch.norm_off",
            "maskview.off", "maskview.overlay", "maskview.only",
            "dlg.convert.view_src", "dlg.convert.view_gray", "dlg.convert.view_mask", "dlg.convert.view_tint"]
 

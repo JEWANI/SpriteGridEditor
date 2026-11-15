@@ -32,13 +32,18 @@ import import_utils
 import mask_convert as mc
 import mask_tools
 import pair_mode
+import pixel_tools
 import reference_layers
+import unity_meta
+from batch_convert import list_sources
+from batch_dialog import BatchConvertDialog
 from about_dialog import AboutDialog
 from app_info import APP_NAME, APP_VERSION
 from autosave import AutoSaver, Snapshot
 from canvas_widget import (
-    BACKGROUND_MODES, BG_CHECKER, ZOOM_STEPS, CanvasWidget,
+    BACKGROUND_MODES, BG_CHECKER, TOOL_MOVE, ZOOM_STEPS, CanvasWidget,
 )
+from cell_editor import CellEditDialog
 from config_manager import ConfigManager
 from layer_model import (
     KIND_BODY, KIND_EXTRA, KIND_PAIR, MAX_EXTRA_LAYERS, MAX_REFERENCE_LAYERS, PARTS, RefLayer, apply_part_order,
@@ -55,6 +60,7 @@ from stats_dialog import StatsDialog
 from preset_dialog import SheetSpecDialog, grid_text, preset_list_label
 from save_dialog import SaveDialog
 from settings_dialog import SettingsDialog
+from shortcuts_dialog import ShortcutsDialog
 from sheet_model import (
     GENDER_COMMON, GENDER_FEMALE, GENDER_MALE, CellRect, GridSpec, SheetModel, all_presets,
     detect_gender, find_matching_presets, make_user_preset, pick_preset_for_file, preset_spec, rect_label,
@@ -164,6 +170,9 @@ class MainWindow(QMainWindow, Translatable):
         self.a_save = a("act.save", self.save, "Ctrl+S")
         self.a_save_as = a("act.save_as", lambda: self.save(force_dialog=True), "Ctrl+Shift+S")
         self.a_exit = a("act.exit", self.close, "Ctrl+Q")
+        # 4단계: 같은 폴더의 다음/이전 PNG (옷 여러 벌 연속 작업)
+        self.a_next_file = a("act.next_file", lambda: self.open_sibling(1), "Ctrl+PgDown")
+        self.a_prev_file = a("act.prev_file", lambda: self.open_sibling(-1), "Ctrl+PgUp")
 
         self.a_undo = a("act.undo", self.undo, "Ctrl+Z")
         self.a_redo = a("act.redo", self.redo, ["Ctrl+Y", "Ctrl+Shift+Z"])
@@ -171,9 +180,10 @@ class MainWindow(QMainWindow, Translatable):
         self.a_cut = a("act.cut", self.cut_cells, "Ctrl+X")
         self.a_paste = a("act.paste", lambda: self.paste_cells(), "Ctrl+V")
         self.a_paste_mirror = a("act.paste_mirror", lambda: self.paste_cells(mirror=True), "M")
-        self.a_paste_flipv = a("act.paste_flipv", lambda: self.paste_cells(flip_v=True))
+        self.a_paste_flipv = a("act.paste_flipv", lambda: self.paste_cells(flip_v=True), "Shift+M")
         self.a_mirror_apply = a("act.mirror_apply", self.mirror_apply, "Ctrl+M")
         self.a_clear = a("act.clear", self.clear_cells, "Delete")
+        self.a_cell_edit = a("act.cell_edit", self.open_cell_editor, "Ctrl+E")  # 4단계: 셀 편집 창
 
         self.a_grid = a("act.grid", self._on_grid_toggled, "G", checkable=True)
         self.a_grid.blockSignals(True)  # 캔버스가 아직 없으므로 초기값 설정 시 슬롯 호출 방지
@@ -200,6 +210,7 @@ class MainWindow(QMainWindow, Translatable):
         self.a_import_adjust = a("act.import_adjust", self.adjust_current_image, "Ctrl+Shift+I")
         # 2단계: 회색+마스크 / Nudge / 미리보기·비교·통계
         self.a_convert = a("act.convert", self.convert_to_gray_mask, "Ctrl+Shift+G")
+        self.a_batch = a("act.batch_convert", self.batch_convert, "Ctrl+Shift+B")  # 4단계: 폴더 일괄 변환
         self.a_remove_mask = a("act.remove_mask", self.remove_mask)
         self.a_compare = a("act.compare", self.open_compare, "Ctrl+Shift+P")
         self.a_stats = a("act.stats", self.open_stats, "Ctrl+Shift+T")
@@ -221,7 +232,7 @@ class MainWindow(QMainWindow, Translatable):
         self.tool_group.setExclusive(True)
         for tool, key, sc in ((None, "tool.select", "V"), (mask_tools.TOOL_PENCIL, "tool.pencil", "P"),
                               (mask_tools.TOOL_FILL, "tool.fill", "F"), (mask_tools.TOOL_RECT, "tool.rect", "R"),
-                              (mask_tools.TOOL_ERASER, "tool.eraser", "E")):
+                              (mask_tools.TOOL_ERASER, "tool.eraser", "E"), (TOOL_MOVE, "tool.move", "S")):
             act = a(key, lambda tool=tool: self._set_paint_tool(tool), sc)
             act.setCheckable(True)
             self.tool_group.addAction(act)
@@ -244,6 +255,7 @@ class MainWindow(QMainWindow, Translatable):
         self.a_part_auto = a("act.part_auto", self.auto_load_parts)
         self.a_settings = a("act.settings", self.open_settings, "Ctrl+,")
         self.a_help = a("act.help", lambda: self._show_help(KIND_HELP), "F1")
+        self.a_shortcuts = a("act.shortcuts", lambda: ShortcutsDialog(self.menuBar(), self).exec(), "Ctrl+/")
         self.a_changelog = a("act.changelog", lambda: self._show_help(KIND_CHANGELOG))
         self.a_about = a("act.about", lambda: AboutDialog(self).exec())
 
@@ -258,6 +270,8 @@ class MainWindow(QMainWindow, Translatable):
         self.m_recent = self.m_file.addMenu("")
         self._t(self.m_recent.setTitle, "act.recent")
         self.m_recent.aboutToShow.connect(self._fill_recent_menu)
+        self.m_file.addAction(self.a_prev_file)
+        self.m_file.addAction(self.a_next_file)
         self.m_file.addSeparator()
         self.m_file.addAction(self.a_exit)
 
@@ -266,6 +280,9 @@ class MainWindow(QMainWindow, Translatable):
         for act in (self.a_undo, self.a_redo, None, self.a_copy, self.a_cut, self.a_paste,
                     self.a_paste_mirror, self.a_paste_flipv, self.a_mirror_apply, None, self.a_clear):
             self.m_edit.addSeparator() if act is None else self.m_edit.addAction(act)
+        self.m_edit.addSeparator()
+        self.m_edit.addAction(self.a_cell_edit)
+        self.m_edit.addAction(self.tool_actions[TOOL_MOVE])
         self.m_edit.addSeparator()
         self.m_nudge = self.m_edit.addMenu("")
         self._t(self.m_nudge.setTitle, "menu.nudge")
@@ -298,6 +315,7 @@ class MainWindow(QMainWindow, Translatable):
         self._t(self.m_tools.setTitle, "menu.tools")
         self.m_tools.addAction(self.a_import_adjust)
         self.m_tools.addAction(self.a_convert)
+        self.m_tools.addAction(self.a_batch)
         self.m_tools.addAction(self.a_remove_mask)
         self.m_tools.addSeparator()
         self.m_maskedit = self.m_tools.addMenu("")
@@ -326,6 +344,7 @@ class MainWindow(QMainWindow, Translatable):
         self.m_help = mb.addMenu("")
         self._t(self.m_help.setTitle, "menu.help")
         self.m_help.addAction(self.a_help)
+        self.m_help.addAction(self.a_shortcuts)
         self.m_help.addAction(self.a_changelog)
         self.m_help.addSeparator()
         self.m_help.addAction(self.a_about)
@@ -435,6 +454,9 @@ class MainWindow(QMainWindow, Translatable):
         self.canvas.paintPressed.connect(self._on_paint_pressed)
         self.canvas.paintMoved.connect(self._on_paint_moved)
         self.canvas.paintReleased.connect(self._on_paint_released)
+        self.canvas.cellDoubleClicked.connect(self._on_cell_double_clicked)
+        self.canvas.moveRequested.connect(self.move_pixel_selection)
+        self.canvas.pixelSelectionChanged.connect(self._on_pixel_selection_changed)
         clay.addWidget(self.canvas_split, stretch=1)
         splitter.addWidget(center)
         splitter.addWidget(self._build_right_panel())
@@ -465,7 +487,7 @@ class MainWindow(QMainWindow, Translatable):
         self._t(hint.setText, "panel.hint")
         lay.addWidget(hint)
         for act in (self.a_copy, self.a_cut, self.a_paste, self.a_paste_mirror,
-                    self.a_mirror_apply, self.a_clear):
+                    self.a_mirror_apply, self.a_clear, self.a_cell_edit, self.tool_actions[TOOL_MOVE]):
             btn = QToolButton()
             btn.setDefaultAction(act)
             btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
@@ -685,6 +707,9 @@ class MainWindow(QMainWindow, Translatable):
             act.setChecked(True)
         self.canvas.set_paint_tool(tool, self.sp_brush.value())
         if tool is None:
+            return
+        if tool == TOOL_MOVE:
+            self._show_message("status.move_tool", {})
             return
         if self.config.get("mask_view.mode", MASK_VIEW_OFF) == MASK_VIEW_OFF:
             self._set_mask_view(MASK_VIEW_OVERLAY)  # 칠한 결과가 보여야 하므로 오버레이를 자동으로 켠다
@@ -1161,11 +1186,14 @@ class MainWindow(QMainWindow, Translatable):
         self.a_copy.setEnabled(has_src)
         self.a_cut.setEnabled(has_src)
         self.a_clear.setEnabled(has_src)
+        self.a_cell_edit.setEnabled(has_src)
         self.a_mirror_apply.setEnabled(has_src)
         for act in (self.a_paste, self.a_paste_mirror, self.a_paste_flipv):
             act.setEnabled(has and has_clip)
         self.a_spec_custom.setEnabled(has)
         self.a_import_adjust.setEnabled(has)
+        self.a_next_file.setEnabled(has)
+        self.a_prev_file.setEnabled(has)
         has_mask = bool(has and m.has_mask)
         self.a_convert.setEnabled(has)
         for act in (self.a_remove_mask, self.a_compare, self.a_stats, self.a_mask_view, self.a_missing,
@@ -1357,7 +1385,7 @@ class MainWindow(QMainWindow, Translatable):
             return
         menu = QMenu(self)
         for act in (self.a_copy, self.a_cut, self.a_paste, self.a_paste_mirror, self.a_paste_flipv,
-                    None, self.a_mirror_apply, self.a_clear):
+                    None, self.a_mirror_apply, self.a_clear, None, self.a_cell_edit):
             menu.addSeparator() if act is None else menu.addAction(act)
         menu.exec(global_pos)
 
@@ -2093,6 +2121,60 @@ class MainWindow(QMainWindow, Translatable):
     # ================================================================== #
     #  2단계: Nudge / 회색+마스크 / 마스크 보기 / 색 미리보기·비교·통계    #
     # ================================================================== #
+    # -- 4단계: 셀 편집 창 / 자유 선택 이동 (§4.2 추가 8) ----------------------
+    def _on_cell_double_clicked(self, r: int, c: int) -> None:
+        src = self.canvas.source()
+        if src is None or not (src.r0 <= r <= src.r1 and src.c0 <= c <= src.c1):
+            self.canvas.set_source(CellRect.single(r, c))
+        self.open_cell_editor()
+
+    def open_cell_editor(self) -> None:
+        """Source 셀(다중 셀이면 범위 전체)을 셀 편집 창으로 연다. 적용하면 실행 취소 한 단계."""
+        m = self.model
+        src = self.canvas.source() if m is not None else None
+        if src is None:
+            self._show_message("status.no_source", {}, "warn")
+            return
+        if not m.grid_matches_image():
+            self._show_message("status.grid_image_mismatch_hint", {}, "warn")
+            return
+        dlg = CellEditDialog(self, m.arr, m.mask if m.has_mask else None, m.grid, src, self._all_refs(),
+                             self.config, self.config.get("app_theme", "dark"))
+        self._cell_dialog = dlg  # 테스트에서 접근
+        accepted = dlg.exec()
+        self._cell_dialog = None
+        if not accepted or dlg.result_block is None or not dlg.changed:
+            if accepted:
+                self._show_message("status.cell_edit_none", {})
+            return
+        g = m.grid
+        y0, x0 = src.r0 * g.cell_h, src.c0 * g.cell_w
+        edit = make_edit(m.arr, y0, x0, dlg.result_block, "edit.cell_edit",
+                         m.mask if m.has_mask else None, dlg.result_mask)
+        m.history.do(m, edit)
+        self._after_edit("status.cell_edited", {"range": rect_label(src)})
+
+    def _on_pixel_selection_changed(self) -> None:
+        sel = self.canvas.pixel_selection()
+        if sel is not None:
+            y0, y1, x0, x1 = sel
+            self._show_message("status.px_selected", {"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0})
+
+    def move_pixel_selection(self, dx: int, dy: int) -> None:
+        """자유 선택 사각형의 내용을 (dx, dy) 옮긴다 (마스크도 같이). 한 번 = 실행 취소 한 단계."""
+        m = self.model
+        sel = self.canvas.pixel_selection() if m is not None else None
+        if sel is None:
+            self._show_message("status.move_need_sel", {}, "warn")
+            return
+        edit, new_sel = pixel_tools.make_move_edit(m.arr, self._doc_mask(), sel, dx, dy, "edit.move")
+        if edit is None:
+            self.canvas.set_pixel_selection(new_sel)
+            return
+        m.history.do(m, edit)
+        self.canvas.set_pixel_selection(new_sel)
+        self._after_edit("status.moved", {"dx": dx, "dy": dy})
+
     def nudge(self, dx: int, dy: int) -> None:
         """Source 셀(들)의 내용을 각 셀 안에서 (dx, dy) 픽셀 이동 (마스크도 같이)."""
         src = self.canvas.source() if self._need_model() else None
@@ -2311,7 +2393,8 @@ class MainWindow(QMainWindow, Translatable):
         if ask:
             prefix_hint = ((self._current_preset() or {}).get("body_motion")
                            or (m.name.split("_")[0] if m.name else "H1WK") or "H1WK")
-            dlg = SaveDialog(self.config, m, prefix_hint, self)
+            dlg = SaveDialog(self.config, m, prefix_hint, self,
+                             motion=(self._current_preset() or {}).get("body_motion", ""))
             if not dlg.exec():
                 return False
             path = dlg.result_path()
@@ -2359,6 +2442,8 @@ class MainWindow(QMainWindow, Translatable):
             QMessageBox.critical(self, tr("dlg.error.title"), tr("dlg.save.failed", path=path, error=str(e)))
             return False
         m.mask_snapped = 0
+        meta = self._copy_unity_meta([path] + ([mc.mask_path_for(path)] if mask_index is not None else []),
+                                     (out.shape[1], out.shape[0]))
 
         m.save_path = path
         m.name = os.path.splitext(os.path.basename(path))[0]
@@ -2371,11 +2456,60 @@ class MainWindow(QMainWindow, Translatable):
         if mask_index is not None:
             self._show_message("status.saved_pair", {"path": path,
                                                      "mask": os.path.basename(mc.mask_path_for(path)),
-                                                     "notes": (" · " + " · ".join(mask_notes)) if mask_notes else ""})
+                                                     "notes": (" · " + " · ".join(mask_notes)) if mask_notes else "",
+                                                     "meta": meta})
         else:
             self._show_message("status.saved_to" if not backup else "status.saved_to_backup",
-                               {"path": path, "backup": os.path.basename(backup) if backup else ""})
+                               {"path": path, "backup": os.path.basename(backup) if backup else "", "meta": meta})
         return True
+
+    def _copy_unity_meta(self, paths: list[str], size: tuple[int, int]) -> str:
+        """Unity Assets 안에 새로 저장한 PNG의 .meta를 같은 폴더의 시트에서 복제 (unity_meta). 상태바용 덧붙임 문구."""
+        if not self.config.get("unity_meta_copy", True):
+            return ""
+        done, missing = [], False
+        for p in paths:
+            code, tpl = unity_meta.copy_meta_for(p, size)
+            if code == unity_meta.META_OK:
+                done.append(tr("status.meta_copied", name=os.path.basename(p) + ".meta", template=tpl))
+            elif code == unity_meta.META_NO_TEMPLATE:
+                missing = True
+        if done:
+            return " · " + " · ".join(done)
+        return " · " + tr("status.meta_no_template") if missing else ""
+
+    # -- 4단계: 폴더 일괄 변환 / 다음·이전 파일 ------------------------------------
+    def batch_convert(self) -> None:
+        m = self.model
+        start = os.path.dirname(m.source_path) if (m and m.source_path) else self.config.get("last_open_dir", "")
+        dlg = BatchConvertDialog(self, self.config, all_presets(self.config.get("sheet_presets", [])), start)
+        dlg.exec()
+        self._fill_save_dir_combo()
+        if dlg.results:
+            ok = sum(1 for r in dlg.results if r.out_path and r.status in ("ok", "warn"))
+            self._show_message("status.batch_done", {"n": ok, "total": len(dlg.results)})
+        if dlg.open_path:
+            self.open_file(dlg.open_path)
+
+    def open_sibling(self, step: int) -> bool:
+        """지금 연 파일과 같은 폴더의 다음(step=1)/이전(-1) PNG를 연다 (마스크·백업 제외, 이름순)."""
+        m = self.model
+        cur = (m.save_path or m.source_path) if m else ""
+        if not cur:
+            return False
+        files = list_sources(os.path.dirname(cur))
+        names = [os.path.normcase(os.path.abspath(f)) for f in files]
+        key = os.path.normcase(os.path.abspath(cur))
+        if key in names:
+            i = names.index(key) + step
+        else:  # 지금 파일이 목록에 없으면(이름 변경 등) 이름순 자리에서 찾는다
+            base = os.path.basename(cur).lower()
+            later = [n for n, f in enumerate(files) if os.path.basename(f).lower() > base]
+            i = (later[0] if later else len(files)) + (0 if step > 0 else -1)
+        if not 0 <= i < len(files):
+            self._show_message("status.no_next_file" if step > 0 else "status.no_prev_file", {}, "warn")
+            return False
+        return self.open_file(files[i])
 
     def _confirm_discard(self) -> bool:
         """수정된 문서가 있으면 저장/버리기/취소 확인. 계속 진행해도 되면 True."""

@@ -40,6 +40,7 @@ DEFAULT_CONFIG = {
     "alpha_threshold_enabled": True,
     "alpha_threshold": 128,
     "transparent_rgb": "black",  # "black" (0,0,0) | "extend" (가장자리 색 확장)
+    "unity_meta_copy": True,  # 4단계: Unity Assets 안에 새 PNG를 저장하면 같은 폴더 시트의 .meta를 복제
     # 열기
     "last_open_dir": "",
     "recent_files": [],
@@ -75,6 +76,9 @@ DEFAULT_CONFIG = {
     # 3단계: 마스크 경계 보정 / F·M 쌍 작업 / 파츠 참조
     "mask_edit": {"brush": 1, "scope": "cell"},  # scope: cell | selection | sheet
     "pair": {"view": "side", "overlay_opacity": 40},  # view: side(나란히) | overlay(겹쳐보기)
+    # 4단계: 셀 편집 창 (§4.2 추가 8)
+    "cell_edit": {"neighbors": True, "neighbor_opacity": 40, "zoom": 800, "brush": 1},
+    "batch_convert": {"in_dir": "", "out_dir": "", "normalize": "auto"},  # 4단계: 폴더 일괄 변환 (normalize: auto|on|off)
     "allies_dir": "",  # 비어 있으면 Base Body 폴더의 상위(Allies) 폴더
     "mask_missing_warn_pct": 10,  # 저장 전 검증: 불투명 픽셀 중 인덱스 0 비율이 이 % 이상이면 경고
     # compare.slots / compare.squad / compare.with_squad / compare.layout 은 비교 창이 처음 저장할 때 생긴다

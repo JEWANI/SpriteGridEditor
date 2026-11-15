@@ -188,6 +188,13 @@ class SettingsDialog(QDialog, Translatable):
         self._fill_rgb_combo()
         self.cb_rgb.currentIndexChanged.connect(self._on_rgb)
         form.addRow(self._label("settings.transparent_rgb"), self.cb_rgb)
+
+        self.cb_meta = QCheckBox()
+        self._t(self.cb_meta.setText, "settings.meta_copy")
+        self._t(self.cb_meta.setToolTip, "settings.meta_copy_tip")
+        self.cb_meta.setChecked(bool(self.config.get("unity_meta_copy", True)))
+        self.cb_meta.toggled.connect(lambda v: self.config.set("unity_meta_copy", bool(v)))
+        form.addRow(self.cb_meta)
         return w
 
     def _fill_save_dir_combo(self) -> None:
@@ -308,6 +315,27 @@ class SettingsDialog(QDialog, Translatable):
         self.sp_pair_opacity.setValue(int(self.config.get("pair.overlay_opacity", 40)))
         self.sp_pair_opacity.valueChanged.connect(lambda v: self.config.set("pair.overlay_opacity", int(v)))
         form.addRow(self._label("settings.pair_opacity"), self.sp_pair_opacity)
+
+        # 4단계: 셀 편집 창 — 이웃 셀 반투명 표시·불투명도·기본 줌 (§6.4 추가 8)
+        self.cb_cell_neighbors = QCheckBox()
+        self._t(self.cb_cell_neighbors.setText, "settings.cell_neighbors")
+        self.cb_cell_neighbors.setChecked(bool(self.config.get("cell_edit.neighbors", True)))
+        self.cb_cell_neighbors.toggled.connect(lambda v: self.config.set("cell_edit.neighbors", bool(v)))
+        form.addRow(self._label("settings.cell_edit"), self.cb_cell_neighbors)
+        self.sp_cell_opacity = QSpinBox()
+        self.sp_cell_opacity.setRange(10, 90)
+        self.sp_cell_opacity.setSuffix(" %")
+        self.sp_cell_opacity.setValue(int(self.config.get("cell_edit.neighbor_opacity", 40)))
+        self.sp_cell_opacity.valueChanged.connect(lambda v: self.config.set("cell_edit.neighbor_opacity", int(v)))
+        form.addRow(self._label("settings.cell_neighbor_opacity"), self.sp_cell_opacity)
+        self.cb_cell_zoom = QComboBox()
+        for z in (400, 600, 800, 1000, 1200, 1600):
+            self.cb_cell_zoom.addItem(f"{z}%", z)
+        cur = int(self.config.get("cell_edit.zoom", 800))
+        self.cb_cell_zoom.setCurrentIndex(max(0, self.cb_cell_zoom.findData(cur)))
+        self.cb_cell_zoom.activated.connect(
+            lambda _i: self.config.set("cell_edit.zoom", int(self.cb_cell_zoom.currentData())))
+        form.addRow(self._label("settings.cell_zoom"), self.cb_cell_zoom)
         return w
 
     def _commit_allies_dir(self) -> None:

@@ -15,6 +15,9 @@ canvas_widget.py
 3단계: 마스크 도구(paint tool)가 켜져 있으면 그냥 클릭/드래그는 **칠하기**가 되고(픽셀 좌표를 시그널로 알림),
       Alt+클릭 = Source 선택, Shift/Ctrl+클릭 = Target 지정은 그대로 쓸 수 있다.
       읽기 전용 모드(쌍 작업 참조 시트)는 이동·확대만 된다.
+4단계: 셀 더블클릭 = 셀 편집 창 요청(cellDoubleClicked).
+      **영역 이동 도구(TOOL_MOVE)**: 드래그 = 셀 경계와 무관한 픽셀 사각형 선택, 선택 안에서 드래그 = 이동
+      (놓을 때 moveRequested), 방향키 1px / Shift+방향키 5px, Esc = 선택 해제.
 """
 
 from __future__ import annotations
@@ -42,6 +45,8 @@ BG_BLACK = "black"
 BG_DOTS = "dots"
 BACKGROUND_MODES = (BG_CHECKER, BG_WHITE, BG_BLACK, BG_DOTS)
 
+TOOL_MOVE = "move"  # 4단계: 자유 선택 이동 (마스크 도구와 같은 도구 슬롯을 쓴다)
+
 
 def numpy_to_qimage(arr) -> QImage:
     """(H,W,4) uint8 RGBA 배열 → QImage (메모리 공유, arr를 살려 두어야 함)."""
@@ -58,6 +63,9 @@ class CanvasWidget(QAbstractScrollArea):
     paintPressed = Signal(int, int)  # 시트 픽셀 좌표 (마스크 도구용)
     paintMoved = Signal(int, int)
     paintReleased = Signal(int, int)
+    cellDoubleClicked = Signal(int, int)  # (행, 열) — 셀 편집 창
+    moveRequested = Signal(int, int)  # (dx, dy) — 자유 선택 이동
+    pixelSelectionChanged = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -103,6 +111,12 @@ class CanvasWidget(QAbstractScrollArea):
         self._hover_px: tuple[int, int] | None = None
         self._rect_drag: tuple[tuple[int, int], tuple[int, int]] | None = None  # 사각형 도구 미리보기(픽셀 좌표)
         self._readonly = False
+        # 4단계: 자유 선택 이동
+        self._px_sel: tuple[int, int, int, int] | None = None  # (y0, y1, x0, x1) 끝 미포함
+        self._move_anchor: tuple[int, int] | None = None
+        self._move_offset = (0, 0)
+        self._float_image: QImage | None = None
+        self._float_buf = None
 
         self._checker = self._make_checker()
         self.horizontalScrollBar().valueChanged.connect(lambda _v: self.viewport().update())
@@ -114,6 +128,8 @@ class CanvasWidget(QAbstractScrollArea):
     def set_model(self, model: SheetModel | None) -> None:
         self._model = model
         self._source = self._target = None
+        self._px_sel = None
+        self._float_image = self._float_buf = None
         self._rebuild_image()
         self._update_scrollbars()
         self.horizontalScrollBar().setValue(0)
@@ -202,6 +218,8 @@ class CanvasWidget(QAbstractScrollArea):
         self._paint_tool = tool
         self._brush_size = max(1, int(brush_size))
         self._rect_drag = None
+        if tool != TOOL_MOVE and self._px_sel is not None:
+            self.set_pixel_selection(None)
         if tool is None:
             self.viewport().unsetCursor()
         else:
@@ -210,6 +228,17 @@ class CanvasWidget(QAbstractScrollArea):
 
     def paint_tool(self) -> str | None:
         return self._paint_tool
+
+    def pixel_selection(self) -> tuple[int, int, int, int] | None:
+        return self._px_sel
+
+    def set_pixel_selection(self, sel: tuple[int, int, int, int] | None) -> None:
+        self._px_sel = sel
+        self._float_image = self._float_buf = None
+        self._move_anchor = None
+        self._move_offset = (0, 0)
+        self.viewport().update()
+        self.pixelSelectionChanged.emit()
 
     def set_brush_size(self, size: int) -> None:
         self._brush_size = max(1, int(size))
@@ -408,6 +437,7 @@ class CanvasWidget(QAbstractScrollArea):
             self._paint_grid(p, ox, oy, s, vp.rect())
         self._paint_selection(p, ox, oy, s, colors)
         self._paint_tool_preview(p, ox, oy, s, colors)
+        self._paint_pixel_selection(p, ox, oy, s, colors)
         self._paint_edit_outline(p, ox, oy, s, colors)
         self._paint_headers(p, ox, oy, s, colors)
         p.end()
@@ -462,9 +492,28 @@ class CanvasWidget(QAbstractScrollArea):
         p.drawImage(dst, img, src)
         p.setOpacity(1.0)
 
+    def _paint_pixel_selection(self, p: QPainter, ox: int, oy: int, s: int, colors: dict) -> None:
+        """자유 선택 사각형(점선)과, 끌고 있는 동안의 이동 미리보기(원래 자리는 어둡게, 옮길 그림은 새 위치에)."""
+        if self._px_sel is None:
+            return
+        y0, y1, x0, x1 = self._px_sel
+        dx, dy = self._move_offset
+        if self._float_image is not None and (dx or dy):
+            shade = QColor(colors["workspace"])
+            shade.setAlpha(170)
+            p.fillRect(QRect(ox + x0 * s, oy + y0 * s, (x1 - x0) * s, (y1 - y0) * s), shade)
+            p.drawImage(QRect(ox + (x0 + dx) * s, oy + (y0 + dy) * s, (x1 - x0) * s, (y1 - y0) * s),
+                        self._float_image)
+        rect = QRect(ox + (x0 + dx) * s, oy + (y0 + dy) * s, (x1 - x0) * s - 1, (y1 - y0) * s - 1)
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(QColor("#000000"), 1))
+        p.drawRect(rect)
+        p.setPen(QPen(QColor(colors["source"]), 1, Qt.DashLine))
+        p.drawRect(rect)
+
     def _paint_tool_preview(self, p: QPainter, ox: int, oy: int, s: int, colors: dict) -> None:
         """마스크 도구 미리보기: 연필/지우개는 브러시 영역, 사각형은 드래그 중인 영역, 채우기는 한 픽셀."""
-        if self._paint_tool is None:
+        if self._paint_tool is None or self._paint_tool == TOOL_MOVE:
             return
         pen = QPen(QColor(colors["target"]), 1)
         pen.setCosmetic(True)
@@ -595,6 +644,18 @@ class CanvasWidget(QAbstractScrollArea):
         event.accept()
 
     def keyPressEvent(self, event) -> None:
+        if self._paint_tool == TOOL_MOVE and self._px_sel is not None and not self._readonly:
+            step = 5 if event.modifiers() & Qt.ShiftModifier else 1
+            d = {Qt.Key_Left: (-step, 0), Qt.Key_Right: (step, 0), Qt.Key_Up: (0, -step),
+                 Qt.Key_Down: (0, step)}.get(event.key())
+            if d is not None and not (event.modifiers() & (Qt.AltModifier | Qt.ControlModifier)):
+                self.moveRequested.emit(*d)
+                event.accept()
+                return
+            if event.key() == Qt.Key_Escape:
+                self.set_pixel_selection(None)
+                event.accept()
+                return
         if event.key() == Qt.Key_Space and not event.isAutoRepeat():
             self._space_down = True
             self.viewport().setCursor(QCursor(Qt.OpenHandCursor))
@@ -626,6 +687,26 @@ class CanvasWidget(QAbstractScrollArea):
         if pos.x() < HDR_W or pos.y() < HDR_H:
             return
         mods = event.modifiers()
+        if self._paint_tool == TOOL_MOVE and not (mods & (Qt.ShiftModifier | Qt.ControlModifier | Qt.AltModifier)):
+            px = self.pixel_at(pos)
+            if px is None:
+                return
+            sel = self._px_sel
+            if sel is not None and sel[2] <= px[0] < sel[3] and sel[0] <= px[1] < sel[1]:
+                # 선택 안에서 누름 → 이동 (미리보기용 그림 사본)
+                y0, y1, x0, x1 = sel
+                self._float_buf = self._model.arr[y0:y1, x0:x1].copy()
+                self._float_image = numpy_to_qimage(self._float_buf)
+                self._move_anchor = px
+                self._move_offset = (0, 0)
+                self._drag_mode = "move"
+                self.viewport().setCursor(QCursor(Qt.SizeAllCursor))
+            else:
+                self._drag_mode = "marquee"
+                self._drag_anchor = px
+                self._px_sel = (px[1], px[1] + 1, px[0], px[0] + 1)
+                self.viewport().update()
+            return
         if self._paint_tool is not None and not (mods & (Qt.ShiftModifier | Qt.ControlModifier | Qt.AltModifier)):
             px = self.pixel_at(pos)
             if px is None:
@@ -657,6 +738,20 @@ class CanvasWidget(QAbstractScrollArea):
             if self._paint_tool is not None:
                 self._hover_px = px
                 self.viewport().update()
+        if self._drag_mode == "marquee" and self._drag_anchor is not None:
+            px = self.pixel_at_clamped(pos)
+            (ax, ay), (bx, by) = self._drag_anchor, px
+            self._px_sel = (min(ay, by), max(ay, by) + 1, min(ax, bx), max(ax, bx) + 1)
+            self.viewport().update()
+            return
+        if self._drag_mode == "move" and self._move_anchor is not None:
+            ox_, oy_ = self._origin()
+            s = self._scale()
+            ix = math.floor((pos.x() - ox_) / s)
+            iy = math.floor((pos.y() - oy_) / s)
+            self._move_offset = (ix - self._move_anchor[0], iy - self._move_anchor[1])
+            self.viewport().update()
+            return
         if self._drag_mode == "paint":
             px = self.pixel_at_clamped(pos)
             if px is not None:
@@ -684,6 +779,22 @@ class CanvasWidget(QAbstractScrollArea):
                 self.set_target(rect)
 
     def mouseReleaseEvent(self, event) -> None:
+        if self._drag_mode == "marquee":
+            self._drag_mode = None
+            self._drag_anchor = None
+            self.pixelSelectionChanged.emit()
+            return
+        if self._drag_mode == "move":
+            dx, dy = self._move_offset
+            self._drag_mode = None
+            self._move_anchor = None
+            self._move_offset = (0, 0)
+            self._float_image = self._float_buf = None
+            self.viewport().setCursor(QCursor(Qt.CrossCursor))
+            if dx or dy:
+                self.moveRequested.emit(dx, dy)
+            self.viewport().update()
+            return
         if self._drag_mode == "paint":
             px = self.pixel_at_clamped(event.position().toPoint())
             self._rect_drag = None
@@ -700,6 +811,14 @@ class CanvasWidget(QAbstractScrollArea):
                 self.viewport().unsetCursor()
         self._drag_mode = None
         self._drag_anchor = None
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        if (self._model is None or self._readonly or event.button() != Qt.LeftButton
+                or self._paint_tool is not None):
+            return
+        cell = self.cell_at(event.position().toPoint())
+        if cell is not None:
+            self.cellDoubleClicked.emit(*cell)
 
     def leaveEvent(self, event) -> None:
         self.hoverPixel.emit(-1, -1)
