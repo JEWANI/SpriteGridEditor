@@ -45,7 +45,7 @@
   "gender.C": "공용",
   "gender.none": "공용",
   "panel.tools": "도구 / 클립보드",
-  "panel.hint": "클릭(드래그) = Source 선택\nShift/Ctrl+클릭 = Target 지정\n휠 = 줌 · 휠 클릭 드래그 / Space+드래그 = 이동",
+  "panel.hint": "클릭(드래그) = Source 선택 · 다시 클릭 = 해제\nShift/Ctrl+클릭 = Target 지정 · Esc/Ctrl+D = 해제\n휠 = 위아래 이동 · Ctrl/Alt+휠 = 줌\n휠 클릭 드래그 / Space+드래그 = 이동",
   "panel.export": "내보내기 옵션",
   "panel.alpha": "알파 임계값",
   "panel.save_dir": "저장 폴더",

@@ -45,7 +45,7 @@
   "gender.C": "Common",
   "gender.none": "common",
   "panel.tools": "Tools / Clipboard",
-  "panel.hint": "Click (drag) = select Source\nShift/Ctrl+click = set Target\nWheel = zoom · middle-drag / Space+drag = pan",
+  "panel.hint": "Click (drag) = select Source · click again = deselect\nShift/Ctrl+click = set Target · Esc/Ctrl+D = deselect\nWheel = scroll · Ctrl/Alt+wheel = zoom\nMiddle-drag / Space+drag = pan",
   "panel.export": "Export Options",
   "panel.alpha": "Alpha threshold",
   "panel.save_dir": "Save folder",

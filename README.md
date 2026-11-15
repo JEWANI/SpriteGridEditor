@@ -7,7 +7,7 @@
 기획서: 볼트 `에디터 툴 제작\EDT-ETC.6 스프라이트 시트 편집기 SpriteGrid Editor 기획서 v1.2.md`
 스택: Python 3 + PySide6(Qt) + Pillow + NumPy
 
-![SpriteGrid Editor 메인 화면 (H1 걷기 옷 시트 + Base Body 참조)](docs/images/main_ko.png)
+![SpriteGrid Editor v0.4.2 메인 화면 (H1 걷기 옷 시트 + Base Body 참조, Source R2C1 → Target R2C3)](docs/images/main_ko.png)
 
 ## 📌 주요 기능 (V0.4.2)
 
@@ -17,9 +17,11 @@
 - **폴더 일괄 변환** (Ctrl+Shift+B) — 폴더의 컬러 시트를 한 번에 회색 + 마스크로, 결과 더블클릭으로 바로 열어 보정, **폴더의 다음/이전 파일**(Ctrl+PgDn/PgUp)
 - **파일명 검증 강화**(소문자·구 종류 문자·번호 000·모션 접두사·공용↔체형별 공존·남은 `_M`), **Unity `.meta` 복제**(같은 폴더 시트의 임포트 설정 유지, guid = `md5('S_unit_' + 파일명)`), **단축키 목록**(Ctrl+/)
 
-| 셀 편집 창 (600%, 이웃 셀 반투명) | 폴더 일괄 변환 |
+| 셀 편집 창 — 🖼 이미지 편집 (파랑) | 셀 편집 창 — 🎭 마스크 편집 (주황, Q) |
 | :---: | :---: |
-| ![셀 편집 창](docs/images/celledit_ko.png) | ![폴더 일괄 변환](docs/images/batch_ko.png) |
+| ![셀 편집 창 이미지 편집](docs/images/celledit_ko.png) | ![셀 편집 창 마스크 편집](docs/images/celledit_mask_ko.png) |
+
+![폴더 일괄 변환](docs/images/batch_ko.png)
 
 ### 🖌 마스크 보정 · 쌍 작업 (3단계, V0.3.0)
 - **마스크 경계 보정 브러시** — 연필 · 채우기 · 사각형 · 번호 교체 · 지우개, **알파 보호**, 적용 범위(현재 셀 / 선택 셀 / 시트 전체), 획 단위 실행 취소
