@@ -2,7 +2,7 @@
 참조하는 단일 소스. 버전을 올릴 때는 여기 값과 CHANGELOG.md를 함께 갱신한다."""
 
 APP_NAME = "SpriteGrid Editor"
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.4.1"
 APP_VERSION_NAME = "셀 편집 · 일괄 변환"  # 이번 버전의 코드네임 (CHANGELOG의 버전 제목과 맞춤)
 APP_VERSION_NAME_EN = "Cell Editor · Batch Convert"
 

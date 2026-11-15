@@ -139,8 +139,11 @@ Turns a color outfit sheet into a **gray sheet + index mask (`_M`)** for Unity's
 ### Cell editor — erase dots and paint (`Edit → Cell Editor…`, Ctrl+E, double-click a cell)
 - Opens the selected cell (or **the whole selected range**) in a pop-up, magnified (800% by default, wheel to zoom). Base Body and reference layers for the same area are drawn below (or above) so you can paint against them.
 - **Only the area inside the thick border is edited**; the neighbor cells around it are shown semi-transparent, view-only (`Neighbors` checkbox / turn off or set opacity 10-90% in Preferences).
-- Tools: **B paint · E erase · I eyedropper**. While painting or erasing, **hold Alt for the eyedropper** (release to go back); Alt+click also picks. `[` `]` brush size, `X` swaps primary ↔ secondary color, click a color swatch to choose a color.
-- The cursor follows the tool — paint = brush-size square, erase = dashed square, eyedropper = pipette. The top line shows tool, size and color; the right side shows the coordinates and color under the mouse.
+- Tools: **B paint · E erase · I eyedropper · V move**. While painting or erasing, **hold Alt for the eyedropper** (release to go back); Alt+click also picks. `[` `]` brush size.
+- **Left mouse = paint, right mouse = erase** (no tool switch needed). **Shift+click** draws a straight line from the last painted point.
+- **Five color slots** (second row): pick with keys **1-5**, `X` returns to the previous slot, click the active slot again to choose its color. The eyedropper fills the current slot (color and mask index). Slots are remembered.
+- **Move (V)**: drag a cell to move its picture — arrows 1px / Shift+arrows 5px (cell under the mouse). Parts pushed past the cell edge are clipped; the mask moves too.
+- The cursor follows the tool — paint = brush-size square, erase = dashed square, eyedropper = pipette, move = four-way arrow. The top line shows tool, size and color; the right side shows the coordinates and color under the mouse.
 - Paint is always opaque (alpha 255); erased pixels become transparent with mask 0. On sheets with a mask, **the eyedropper takes the mask index together with the color** and paints it too (or set `Mask index` directly).
 - Ctrl+Z / Ctrl+Y undo inside the window. **Apply (Ctrl+Enter)** closes it and writes to the sheet — in the main window **one undo** reverts everything done in the editor. `Cancel` / Esc discards (asks if anything changed).
 

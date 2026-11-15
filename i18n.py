@@ -37,11 +37,59 @@ def _load_table(lang: str) -> dict[str, str]:
     return table
 
 
+_qt_translator = None  # Qt 기본 문구(메시지 상자 Save/Cancel, 색 선택 창 등) 번역기
+
+
+def _qt_translation_dirs() -> list[str]:
+    """qtbase_*.qm 을 찾을 폴더: exe 번들(translations/) → Qt 설치 경로 → PySide6 패키지."""
+    dirs = [resource_path("translations")]
+    try:
+        from PySide6.QtCore import QLibraryInfo
+        dirs.append(QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath))
+    except Exception:
+        pass
+    try:
+        import PySide6
+        dirs.append(os.path.join(os.path.dirname(PySide6.__file__), "translations"))
+    except Exception:
+        pass
+    return dirs
+
+
+def install_qt_translator(lang: str) -> bool:
+    """Qt 표준 버튼·대화상자 문구를 lang 으로 (영어는 Qt 기본값이라 번역기를 뺀다).
+
+    QMessageBox 의 Save/Discard/Cancel, QDialogButtonBox 의 OK/Cancel, QColorDialog 등이
+    한국어 화면에서 영어로 나오던 문제 (v0.4.1). QApplication 이 없으면 아무것도 하지 않는다.
+    """
+    global _qt_translator
+    try:
+        from PySide6.QtCore import QCoreApplication, QTranslator
+    except Exception:
+        return False
+    app = QCoreApplication.instance()
+    if app is None:
+        return False
+    if _qt_translator is not None:
+        app.removeTranslator(_qt_translator)
+        _qt_translator = None
+    if lang == "en":
+        return True
+    tr_obj = QTranslator(app)
+    for d in _qt_translation_dirs():
+        if d and tr_obj.load(f"qtbase_{lang}", d):
+            app.installTranslator(tr_obj)
+            _qt_translator = tr_obj
+            return True
+    return False
+
+
 def set_language(lang: str) -> None:
     global _current
     _current = lang if lang in SUPPORTED_LANGUAGES else "ko"
     _load_table(_current)
     _load_table("ko")
+    install_qt_translator(_current)
 
 
 def current_language() -> str:

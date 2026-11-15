@@ -207,3 +207,21 @@ def make_move_edit(arr: np.ndarray, mask: np.ndarray | None, sel: Bounds, dx: in
         edit.mask_before = mask[uy0:uy1, ux0:ux1].copy()
         edit.mask_after = mregion
     return edit, new_sel
+
+
+# --------------------------------------------------------------------------- #
+#  셀 편집 창: 칸 안에서 그림 이동 (v0.4.1)                                    #
+# --------------------------------------------------------------------------- #
+def shift_block(block: np.ndarray, mblock: np.ndarray | None, dx: int, dy: int
+                ) -> tuple[np.ndarray, np.ndarray | None]:
+    """블록 내용을 (dx, dy)만큼 옮긴 새 블록. 블록 밖으로 나간 부분은 버리고, 빈 자리는 투명(마스크 0)."""
+    h, w = block.shape[:2]
+    out = np.zeros_like(block)
+    mout = np.zeros_like(mblock) if mblock is not None else None
+    sy0, sy1 = max(0, -dy), min(h, h - dy)
+    sx0, sx1 = max(0, -dx), min(w, w - dx)
+    if sy0 < sy1 and sx0 < sx1:
+        out[sy0 + dy:sy1 + dy, sx0 + dx:sx1 + dx] = block[sy0:sy1, sx0:sx1]
+        if mout is not None:
+            mout[sy0 + dy:sy1 + dy, sx0 + dx:sx1 + dx] = mblock[sy0:sy1, sx0:sx1]
+    return out, mout

@@ -77,7 +77,8 @@ DEFAULT_CONFIG = {
     "mask_edit": {"brush": 1, "scope": "cell"},  # scope: cell | selection | sheet
     "pair": {"view": "side", "overlay_opacity": 40},  # view: side(나란히) | overlay(겹쳐보기)
     # 4단계: 셀 편집 창 (§4.2 추가 8)
-    "cell_edit": {"neighbors": True, "neighbor_opacity": 40, "zoom": 800, "brush": 1},
+    "cell_edit": {"neighbors": True, "neighbor_opacity": 40, "zoom": 800, "brush": 1,
+                  "colors": []},  # colors: 색 칸 5개 [["#RRGGBB", 마스크 번호], ...] (v0.4.1)
     "batch_convert": {"in_dir": "", "out_dir": "", "normalize": "auto"},  # 4단계: 폴더 일괄 변환 (normalize: auto|on|off)
     "allies_dir": "",  # 비어 있으면 Base Body 폴더의 상위(Allies) 폴더
     "mask_missing_warn_pct": 10,  # 저장 전 검증: 불투명 픽셀 중 인덱스 0 비율이 이 % 이상이면 경고
