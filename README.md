@@ -9,7 +9,7 @@
 
 ![SpriteGrid Editor 메인 화면 (H1 걷기 옷 시트 + Base Body 참조)](docs/images/main_ko.png)
 
-## 📌 주요 기능 (V0.4.1)
+## 📌 주요 기능 (V0.4.2)
 
 ### 🖍 셀 편집 · 영역 이동 · 일괄 변환 (4단계)
 - **셀 편집 창** (Ctrl+E / 셀 더블클릭) — 선택 셀(다중 셀이면 범위 전체)을 팝업으로 크게 열어 **도트 칠하기 B · 지우기 E · 스포이트 I · 이동 V**, **왼쪽 칠하기 / 오른쪽 지우기**, **Alt 누르는 동안 임시 스포이트**, 색 칸 5개(숫자키 1\~5), **채우기 G · 칸 좌우 반전 H · 시트 색 팔레트 · 마스크 보기 M**, Base Body·참조 레이어를 깔고 이웃 셀은 반투명 표시, **적용 = 메인 실행 취소 한 단계**
@@ -50,8 +50,9 @@
 - 열린 시트에도 `도구 → 이미지 크기·배경 조정…`(Ctrl+Shift+I)
 
 ### 🖼 캔버스
-- 줌 100\~800% (정수 배율, **보간 없음**), 휠 클릭 드래그 / Space+드래그 이동, 그리드 오버레이(G)
-- 셀 선택: 클릭 = Source, Shift/Ctrl+클릭 = Target, 드래그 = 다중 셀 범위
+- 줌 100\~800% (정수 배율, **보간 없음**, Ctrl/Alt+휠), 휠 = 위아래 이동 · Shift+휠 = 좌우, 휠 클릭 드래그 / Space+드래그 이동, 그리드 오버레이(G)
+- 셀 선택: 클릭 = Source, Shift/Ctrl+클릭 = Target, 드래그 = 다중 셀 범위, 같은 칸 다시 클릭 = 해제, Esc / Ctrl+D / 빈 곳 클릭 = 해제
+- 이동: Alt+방향키 = 선택 셀, **Ctrl+방향키 = 모든 셀(레이어 전체)**
 - 배경: 투명 체크무늬 / 흰색 / 검은색 / 도트 격자 (B 순환)
 - **편집 레이어 vs 참조 레이어 구분** — 캔버스 위 레이어 바 + 우측 레이어 목록(`[편집·저장]` / `[참조·위/아래]`), 편집 시트는 굵은 윤곽선, 참조는 색조 표시·읽기 전용
 - **참조 레이어 최대 6개** (Base Body 1 + 추가 PNG 5). 레이어별 눈(표시)·불투명도·위/아래 위치. 편집 레이어는 항상 1개(현재 시트)
@@ -72,14 +73,14 @@
 - 자동 저장(10분 · 2개) + 비정상 종료 후 복구
 
 ### 🌐 앱 공통
-- 제목줄 `SpriteGrid Editor v0.4.1 - 파일명 *`, 도움말(사용법 F1 / 단축키 목록 Ctrl+/ / 변경 내역 / 정보), 한국어·English, 테마 6종
+- 제목줄 `SpriteGrid Editor v0.4.2 - 파일명 *`, 도움말(사용법 F1 / 단축키 목록 Ctrl+/ / 변경 내역 / 정보), 한국어·English, 테마 6종
 
 ---
 
 ## 📦 다운로드
 
-[Releases](https://github.com/JEWANI/SpriteGridEditor/releases/latest)에서 `SpriteGridEditor_v0.4.1_win64.zip`을 받아 압축을 풀고
-`SpriteGridEditor v0.4.1.exe`를 실행한다 (Windows 10/11 64bit, 설치 불필요).
+[Releases](https://github.com/JEWANI/SpriteGridEditor/releases/latest)에서 `SpriteGridEditor_v0.4.2_win64.zip`을 받아 압축을 풀고
+`SpriteGridEditor v0.4.2.exe`를 실행한다 (Windows 10/11 64bit, 설치 불필요).
 압축 안에는 실행파일과 함께 `README.txt`(빠른 시작) · `CHANGELOG.md`(업데이트 내역) · `HELP_ko.md` / `HELP_en.md`(사용법)가 들어 있다.
 
 > 서명되지 않은 실행파일이라 처음 실행할 때 Windows SmartScreen 경고가 뜰 수 있다 → `추가 정보` → `실행`.
@@ -98,7 +99,7 @@ python main.py
 ```bash
 pip install pyinstaller
 ```
-`실행파일 만들기.bat` 더블클릭 → `dist/SpriteGridEditor v0.4.1.exe` 생성 (버전은 `app_info.py` 에서 읽는다).
+`실행파일 만들기.bat` 더블클릭 → `dist/SpriteGridEditor v0.4.2.exe` 생성 (버전은 `app_info.py` 에서 읽는다).
 `locales/`, `HELP_*.md`, `CHANGELOG.md`, `icon.ico` 는 exe 안에 포함되고,
 `config.json` · `autosave/` · `output/` 은 **exe 가 있는 폴더**에 만들어진다.
 
@@ -165,7 +166,7 @@ SpriteGridEditor/
 | **1단계** | **V0.1.0** ✅ | 시트 열기/저장, 규격 프리셋, 그리드·줌, 셀 편집·다중 셀, Undo/Redo, 배경 레이어, 알파 임계값, 자동 저장, 공통 구성 |
 | **2단계** | **V0.2.0** ✅ | 컬러 → 회색 + 마스크 자동 변환, 밝기 정규화, Nudge, 프리셋 색 미리보기·4색 비교, 마스크 통계, 저장 전 검증 (Unity 정비실 확인 대기) |
 | **3단계** | **V0.3.0** ✅ | 마스크 경계 보정 브러시, 셀 간 마스크 복사, 마스크 오버레이, F/M 쌍 작업 모드, 파츠 참조 레이어 (실제 옷으로 사용 확인 대기) |
-| **4단계** | **V0.4.0\~0.4.1** ✅ | 셀 편집 창(칠하기·지우기·스포이트), 영역 이동, 폴더 일괄 변환, 파일명 검증 강화, Unity `.meta` 복제, 단축키 목록 (미러 제외 영역은 검토 후 셀 편집 창으로 대체) |
+| **4단계** | **V0.4.0\~0.4.2** ✅ | 셀 편집 창(칠하기·지우기·스포이트), 영역 이동, 폴더 일괄 변환, 파일명 검증 강화, Unity `.meta` 복제, 단축키 목록 (미러 제외 영역은 검토 후 셀 편집 창으로 대체) |
 
 *전체 변경 이력은 [CHANGELOG.md](./CHANGELOG.md) 참고.*
 

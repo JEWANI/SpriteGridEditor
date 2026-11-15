@@ -18,7 +18,8 @@ from i18n import tr
 CANVAS_KEYS = (
     ("keys.canvas_select", "keys.m_click_drag"),
     ("keys.canvas_target", "keys.m_mod_click"),
-    ("keys.canvas_zoom", "keys.m_wheel"),
+    ("keys.canvas_wheel_scroll", "keys.m_wheel"),
+    ("keys.canvas_zoom", "keys.m_ctrl_alt_wheel"),
     ("keys.canvas_pan", "keys.m_pan"),
     ("keys.canvas_cell_edit", "keys.m_double"),
     ("keys.canvas_move_keys", "← → ↑ ↓ / Shift"),
@@ -42,7 +43,8 @@ CELL_EDITOR_KEYS = (
     ("keys.ce_undo", "Ctrl+Z / Ctrl+Y"),
     ("keys.ce_apply", "Ctrl+Enter"),
     ("keys.ce_cancel", "Esc"),
-    ("keys.ce_zoom", "keys.m_wheel"),
+    ("keys.canvas_wheel_scroll", "keys.m_wheel"),
+    ("keys.ce_zoom", "keys.m_ctrl_alt_wheel"),
 )
 
 

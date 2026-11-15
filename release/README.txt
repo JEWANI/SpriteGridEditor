@@ -1,5 +1,5 @@
 ﻿==============================================================
- SpriteGrid Editor v0.4.1 — 셀 편집 도구 보강 (Cell Editor Tools)
+ SpriteGrid Editor v0.4.2 — 선택·이동 조작 (Selection & Move Controls)
  2026-11-15 · 만든이 재와니
  https://github.com/JEWANI/SpriteGridEditor
 ==============================================================
@@ -12,7 +12,7 @@
 
 ■ 실행
   1. 압축을 원하는 폴더에 풉니다 (설치 불필요, Windows 10/11 64bit).
-  2. "SpriteGridEditor v0.4.1.exe"를 실행합니다.
+  2. "SpriteGridEditor v0.4.2.exe"를 실행합니다.
      - 서명되지 않은 실행파일이라 Windows SmartScreen 경고가 뜨면 [추가 정보] → [실행].
   3. 처음 실행하면 exe가 있는 폴더에 config.json(설정) · output\(기본 저장 폴더) · autosave\(자동 저장)가 생깁니다.
      → 쓰기 권한이 있는 폴더(예: 바탕화면, 문서)에 두세요. Program Files 안은 권장하지 않습니다.
@@ -25,7 +25,7 @@
   자세한 사용법: 프로그램 안 [도움말 → 사용법](F1) 또는 동봉된 HELP_ko.md
 
 ■ 동봉 파일
-  SpriteGridEditor v0.4.1.exe  실행파일
+  SpriteGridEditor v0.4.2.exe  실행파일
   README.txt                    이 파일 (빠른 시작)
   CHANGELOG.md                  버전별 업데이트 내역
   HELP_ko.md / HELP_en.md       사용법 (한국어 / English)
@@ -34,6 +34,10 @@
 ■ 업데이트
   이전 버전 폴더의 config.json을 새 버전 exe 옆에 복사하면 설정(저장 폴더·최근 파일·프리셋 등)이 이어집니다.
   .md 파일은 메모장으로도 열리지만 VS Code·Obsidian·GitHub에서 보면 표가 보기 좋게 나옵니다.
+
+■ v0.4.2 수정
+  - 같은 칸을 다시 클릭하면 선택 해제, 빈 곳 클릭·Esc·Ctrl+D로 선택 해제
+  - Ctrl+방향키 = 모든 셀(레이어 전체) 이동, 휠 = 위아래 이동, Ctrl/Alt+휠 = 확대·축소
 
 ■ v0.4.1 수정
   - 셀 편집 창: 왼쪽 칠하기 / 오른쪽 지우기, 이동 도구 V, 색 칸 5개(숫자키 1~5), Shift+클릭 직선
@@ -56,7 +60,7 @@ All editing, zooming and saving use nearest-neighbor only, so pixels never blur.
 
 ■ Run
   1. Extract the zip anywhere (no install, Windows 10/11 64-bit).
-  2. Run "SpriteGridEditor v0.4.1.exe".
+  2. Run "SpriteGridEditor v0.4.2.exe".
      - The exe is not code-signed; if SmartScreen warns, click [More info] → [Run anyway].
   3. config.json, output\ and autosave\ are created next to the exe — keep it in a writable folder.
 
@@ -66,4 +70,4 @@ All editing, zooming and saving use nearest-neighbor only, so pixels never blur.
   Full guide: Help → Usage (F1) in the app, or HELP_en.md. Language: Settings → General → English.
 
 ■ Files
-  SpriteGridEditor v0.4.1.exe / README.txt / CHANGELOG.md (release notes) / HELP_ko.md, HELP_en.md (user guide) / LICENSE (MIT)
+  SpriteGridEditor v0.4.2.exe / README.txt / CHANGELOG.md (release notes) / HELP_ko.md, HELP_en.md (user guide) / LICENSE (MIT)

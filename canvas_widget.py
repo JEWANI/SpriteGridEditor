@@ -103,6 +103,7 @@ class CanvasWidget(QAbstractScrollArea):
         self._target: CellRect | None = None
         self._drag_mode: str | None = None  # "source" | "target" | "pan"
         self._drag_anchor: tuple[int, int] | None = None
+        self._toggle_off = False  # (v0.4.2) 이미 선택된 한 칸을 다시 눌렀으면 떼는 순간 선택 해제
         self._pan_last = QPoint()
         self._space_down = False
         # 3단계: 마스크 도구 / 읽기 전용
@@ -280,6 +281,24 @@ class CanvasWidget(QAbstractScrollArea):
         self._source = rect
         self.viewport().update()
         self.selectionChanged.emit()
+
+    def clear_selection(self) -> bool:
+        """Source·Target 모두 해제. 해제한 게 있으면 True."""
+        had = self._source is not None or self._target is not None
+        self._source = self._target = None
+        self.viewport().update()
+        self.selectionChanged.emit()
+        return had
+
+    def step_back_selection(self) -> bool:
+        """Esc: Target 이 있으면 Target 만, 없으면 Source 해제. 해제한 게 있으면 True."""
+        if self._target is not None:
+            self.set_target(None)
+            return True
+        if self._source is not None:
+            self.set_source(None)
+            return True
+        return False
 
     def set_target(self, rect: CellRect | None) -> None:
         self._target = rect
@@ -636,11 +655,19 @@ class CanvasWidget(QAbstractScrollArea):
         self._update_scrollbars()
 
     def wheelEvent(self, event) -> None:
+        """(v0.4.2) 휠 = 위아래 이동, Shift+휠 = 좌우 이동, Ctrl+휠 / Alt+휠 = 확대·축소.
+        Alt 를 누르면 Qt가 휠 방향을 가로로 바꿔 보내므로 x·y 중 0이 아닌 값을 쓴다."""
         if self._model is None:
             return
-        delta = event.angleDelta().y()
-        if delta:
-            self.zoom_step(1 if delta > 0 else -1, event.position().toPoint())
+        mods = event.modifiers()
+        ad = event.angleDelta()
+        delta = ad.y() or ad.x()
+        if mods & (Qt.ControlModifier | Qt.AltModifier):
+            if delta:
+                self.zoom_step(1 if delta > 0 else -1, event.position().toPoint())
+        elif delta:
+            bar = self.horizontalScrollBar() if mods & Qt.ShiftModifier else self.verticalScrollBar()
+            bar.setValue(bar.value() - int(delta / 120 * max(20, bar.singleStep() * 3)))
         event.accept()
 
     def keyPressEvent(self, event) -> None:
@@ -656,6 +683,10 @@ class CanvasWidget(QAbstractScrollArea):
                 self.set_pixel_selection(None)
                 event.accept()
                 return
+        if (event.key() == Qt.Key_Escape and self._paint_tool != TOOL_MOVE and not self._readonly
+                and self.step_back_selection()):
+            event.accept()
+            return
         if event.key() == Qt.Key_Space and not event.isAutoRepeat():
             self._space_down = True
             self.viewport().setCursor(QCursor(Qt.OpenHandCursor))
@@ -720,15 +751,21 @@ class CanvasWidget(QAbstractScrollArea):
             return
         cell = self.cell_at(pos)
         if cell is None:
+            # 시트 바깥 빈 곳을 누르면 선택 해제 (v0.4.2)
+            if not (mods & Qt.AltModifier):
+                self.clear_selection()
             return
+        single = CellRect.single(*cell)
         if mods & (Qt.ShiftModifier | Qt.ControlModifier):
             self._drag_mode = "target"
+            self._toggle_off = self._target == single
             self._drag_anchor = cell
-            self.set_target(CellRect.single(*cell))
+            self.set_target(single)
         else:
             self._drag_mode = "source"
+            self._toggle_off = self._source == single
             self._drag_anchor = cell
-            self.set_source(CellRect.single(*cell))
+            self.set_source(single)
 
     def mouseMoveEvent(self, event) -> None:
         pos = event.position().toPoint()
@@ -809,6 +846,14 @@ class CanvasWidget(QAbstractScrollArea):
                 self.viewport().setCursor(QCursor(Qt.OpenHandCursor))
             else:
                 self.viewport().unsetCursor()
+        if self._drag_mode in ("source", "target") and self._toggle_off and self._drag_anchor is not None:
+            # 이미 선택된 한 칸을 다시 눌렀다 뗌(끌지 않음) → 그 선택 해제
+            single = CellRect.single(*self._drag_anchor)
+            if self._drag_mode == "source" and self._source == single:
+                self.set_source(None)
+            elif self._drag_mode == "target" and self._target == single:
+                self.set_target(None)
+        self._toggle_off = False
         self._drag_mode = None
         self._drag_anchor = None
 

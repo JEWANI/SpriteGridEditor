@@ -17,7 +17,11 @@ Every edit, zoom and save uses **nearest-neighbor** only, so your pixels never g
 |---|---|
 | Click / drag | Select the **Source** cell (drag to select a rectangular range of cells) |
 | `Shift`/`Ctrl` + click (drag) | Set the **Target** (solid yellow = Source, dashed orange = Target) |
-| Mouse wheel | Zoom 100–800% (integer scales) |
+| Click the same cell again | Deselect it (Source = plain click, Target = `Shift`/`Ctrl`+click) |
+| Click empty space outside the sheet · `Ctrl+D` | Clear Source and Target |
+| `Esc` | Clears the Target first, press again to clear the Source |
+| Mouse wheel / `Shift`+wheel | Scroll up-down / left-right |
+| `Ctrl`+wheel · `Alt`+wheel | Zoom 100–800% (integer scales) |
 | Middle-drag / `Space` + drag | Pan |
 | `G` | Toggle the grid |
 | `B` | Cycle the background (checkerboard → white → black → dot grid) |
@@ -105,6 +109,7 @@ Turns a color outfit sheet into a **gray sheet + index mask (`_M`)** for Unity's
 
 ### Nudge
 - Select Source cell(s) and press `Alt+Arrow` (1px) / `Alt+Shift+Arrow` (5px). Content moves inside each cell; pixels pushed out of the cell are dropped. The mask moves too.
+- **All cells (whole layer)**: `Ctrl+Arrow` (1px) / `Ctrl+Shift+Arrow` (5px) — moves every cell of the sheet by the same amount regardless of the selection (inside each cell, `Edit → Move All Cells`). Use it to align the whole sheet to the Base Body.
 
 ### Mask files
 - Opening `X.png` also loads `X_M.png` from the same folder as the mask, if present.
@@ -137,7 +142,7 @@ Turns a color outfit sheet into a **gray sheet + index mask (`_M`)** for Unity's
 ## Cell editor · Move area · Batch convert (stage 4)
 
 ### Cell editor — erase dots and paint (`Edit → Cell Editor…`, Ctrl+E, double-click a cell)
-- Opens the selected cell (or **the whole selected range**) in a pop-up, magnified (800% by default, wheel to zoom). Base Body and reference layers for the same area are drawn below (or above) so you can paint against them.
+- Opens the selected cell (or **the whole selected range**) in a pop-up, magnified (800% by default, Ctrl/Alt+wheel to zoom, wheel scrolls). Base Body and reference layers for the same area are drawn below (or above) so you can paint against them.
 - **Only the area inside the thick border is edited**; the neighbor cells around it are shown semi-transparent, view-only (`Neighbors` checkbox / turn off or set opacity 10-90% in Preferences).
 - Tools: **B paint · E erase · I eyedropper · V move**. While painting or erasing, **hold Alt for the eyedropper** (release to go back); Alt+click also picks. `[` `]` brush size.
 - **Left mouse = paint, right mouse = erase** (no tool switch needed). **Shift+click** draws a straight line from the last painted point.

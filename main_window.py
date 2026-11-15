@@ -183,6 +183,7 @@ class MainWindow(QMainWindow, Translatable):
         self.a_paste_flipv = a("act.paste_flipv", lambda: self.paste_cells(flip_v=True), "Shift+M")
         self.a_mirror_apply = a("act.mirror_apply", self.mirror_apply, "Ctrl+M")
         self.a_clear = a("act.clear", self.clear_cells, "Delete")
+        self.a_deselect = a("act.deselect", self.deselect_all, "Ctrl+D")  # v0.4.2: Source·Target 선택 해제
         self.a_cell_edit = a("act.cell_edit", self.open_cell_editor, "Ctrl+E")  # 4단계: 셀 편집 창
 
         self.a_grid = a("act.grid", self._on_grid_toggled, "G", checkable=True)
@@ -226,6 +227,15 @@ class MainWindow(QMainWindow, Translatable):
                                 ("act.nudge_up5", 0, -5, "Alt+Shift+Up"),
                                 ("act.nudge_down5", 0, 5, "Alt+Shift+Down")):
             self.nudge_actions.append(a(key, lambda dx=dx, dy=dy: self.nudge(dx, dy), sc))
+        # v0.4.2: Ctrl+방향키 = 모든 셀(레이어 전체)을 각 셀 안에서 이동, Ctrl+Shift = 5px
+        self.nudge_all_actions: list[QAction] = []
+        for key, dx, dy, sc in (("act.nudge_all_left", -1, 0, "Ctrl+Left"), ("act.nudge_all_right", 1, 0, "Ctrl+Right"),
+                                ("act.nudge_all_up", 0, -1, "Ctrl+Up"), ("act.nudge_all_down", 0, 1, "Ctrl+Down"),
+                                ("act.nudge_all_left5", -5, 0, "Ctrl+Shift+Left"),
+                                ("act.nudge_all_right5", 5, 0, "Ctrl+Shift+Right"),
+                                ("act.nudge_all_up5", 0, -5, "Ctrl+Shift+Up"),
+                                ("act.nudge_all_down5", 0, 5, "Ctrl+Shift+Down")):
+            self.nudge_all_actions.append(a(key, lambda dx=dx, dy=dy: self.nudge_all(dx, dy), sc))
         # 3단계: 마스크 보정 도구 / 셀 간 마스크 복사 / 쌍 작업 / 참조 파츠
         self.tool_actions: dict[str | None, QAction] = {}
         self.tool_group = QActionGroup(self)
@@ -278,7 +288,8 @@ class MainWindow(QMainWindow, Translatable):
         self.m_edit = mb.addMenu("")
         self._t(self.m_edit.setTitle, "menu.edit")
         for act in (self.a_undo, self.a_redo, None, self.a_copy, self.a_cut, self.a_paste,
-                    self.a_paste_mirror, self.a_paste_flipv, self.a_mirror_apply, None, self.a_clear):
+                    self.a_paste_mirror, self.a_paste_flipv, self.a_mirror_apply, None, self.a_clear,
+                    self.a_deselect):
             self.m_edit.addSeparator() if act is None else self.m_edit.addAction(act)
         self.m_edit.addSeparator()
         self.m_edit.addAction(self.a_cell_edit)
@@ -290,6 +301,12 @@ class MainWindow(QMainWindow, Translatable):
             if i == 4:
                 self.m_nudge.addSeparator()
             self.m_nudge.addAction(act)
+        self.m_nudge_all = self.m_edit.addMenu("")
+        self._t(self.m_nudge_all.setTitle, "menu.nudge_all")
+        for i, act in enumerate(self.nudge_all_actions):
+            if i == 4:
+                self.m_nudge_all.addSeparator()
+            self.m_nudge_all.addAction(act)
 
         self.m_view = mb.addMenu("")
         self._t(self.m_view.setTitle, "menu.view")
@@ -1203,6 +1220,8 @@ class MainWindow(QMainWindow, Translatable):
         self.sl_mask_opacity.setEnabled(has_mask)
         for act in self.nudge_actions:
             act.setEnabled(has_src)
+        for act in self.nudge_all_actions:
+            act.setEnabled(has)
         if not has:
             self.lb_mask_state.setText("")
         elif has_mask:
@@ -2122,6 +2141,15 @@ class MainWindow(QMainWindow, Translatable):
     #  2단계: Nudge / 회색+마스크 / 마스크 보기 / 색 미리보기·비교·통계    #
     # ================================================================== #
     # -- 4단계: 셀 편집 창 / 자유 선택 이동 (§4.2 추가 8) ----------------------
+    def deselect_all(self) -> None:
+        """편집 → 선택 해제 (Ctrl+D): Source·Target·영역 이동 선택을 모두 지운다."""
+        cleared = self.canvas.clear_selection()
+        if self.canvas.pixel_selection() is not None:
+            self.canvas.set_pixel_selection(None)
+            cleared = True
+        if cleared:
+            self._show_message("status.deselected")
+
     def _on_cell_double_clicked(self, r: int, c: int) -> None:
         src = self.canvas.source()
         if src is None or not (src.r0 <= r <= src.r1 and src.c0 <= c <= src.c1):
@@ -2184,6 +2212,16 @@ class MainWindow(QMainWindow, Translatable):
         m = self.model
         m.history.do(m, cell_ops.make_nudge_edit(m.arr, m.grid, src, dx, dy, "edit.nudge", self._doc_mask()))
         self._after_edit("status.nudged", {"dx": dx, "dy": dy, "rows": src.rows, "cols": src.cols})
+
+    def nudge_all(self, dx: int, dy: int) -> None:
+        """Ctrl+방향키: 시트의 **모든 셀** 내용을 각 셀 안에서 (dx, dy) 이동 — 레이어 전체 위치 맞추기 (마스크 포함)."""
+        if not self._need_model():
+            return
+        m = self.model
+        g = m.grid
+        rect = CellRect(0, 0, g.rows - 1, g.cols - 1)
+        m.history.do(m, cell_ops.make_nudge_edit(m.arr, g, rect, dx, dy, "edit.nudge_all", self._doc_mask()))
+        self._after_edit("status.nudged_all", {"dx": dx, "dy": dy})
 
     def _replace_sheet_edit(self, rgba: np.ndarray, index: np.ndarray | None, label: str) -> Edit:
         """시트 전체(+마스크)를 바꾸는 실행 취소 가능한 편집."""

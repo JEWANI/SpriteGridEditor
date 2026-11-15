@@ -212,5 +212,117 @@ class CellEditorV041Tests(unittest.TestCase):
         dlg.view.repaint()
 
 
+class CanvasSelectionTests(unittest.TestCase):
+    """v0.4.2: 다시 누르면 선택 해제 / 빈 곳 클릭·Esc·Ctrl+D 로 해제."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        d = self.tmp.name
+        self.cfg = ConfigManager(os.path.join(d, "config.json"))
+        self.cfg.set("body_dir", os.path.join(d, "Allies", "Body"))
+        os.makedirs(os.path.join(d, "Allies", "Body"))
+        sheet = os.path.join(d, "H1WK_P001F.png")
+        Image.fromarray(np.zeros((540, 300, 4), np.uint8), "RGBA").save(sheet)
+        i18n.set_language("ko")
+        self.win = MainWindow(self.cfg, AutoSaver(os.path.join(d, "autosave")))
+        self.win.resize(1400, 900)
+        self.win.show()
+        _app.processEvents()
+        self.assertTrue(self.win.open_file(sheet))
+        self.cv = self.win.canvas
+        self.cv.set_zoom(100)
+        _app.processEvents()
+
+    def tearDown(self):
+        self.win.close()
+        self.tmp.cleanup()
+
+    def _cell(self, r, c):
+        ox, oy = self.cv._origin()
+        s = self.cv._scale()
+        return QPoint(ox + (c * 100 + 50) * s, oy + (r * 135 + 60) * s)
+
+    def test_click_again_toggles_off(self):
+        cv, vp = self.cv, self.cv.viewport()
+        cv.set_source(None)  # 파일을 열면 첫 칸이 선택돼 있으므로 비우고 시작
+        QTest.mouseClick(vp, Qt.LeftButton, Qt.NoModifier, self._cell(0, 0))
+        self.assertEqual(cv.source(), CellRect.single(0, 0))
+        QTest.mouseClick(vp, Qt.LeftButton, Qt.ControlModifier, self._cell(1, 2))
+        self.assertEqual(cv.target(), CellRect.single(1, 2))
+        QTest.mouseClick(vp, Qt.LeftButton, Qt.ShiftModifier, self._cell(1, 2))  # Target 다시 → 해제
+        self.assertIsNone(cv.target())
+        QTest.mouseClick(vp, Qt.LeftButton, Qt.NoModifier, self._cell(0, 0))  # Source 다시 → 해제
+        self.assertIsNone(cv.source())
+        # 다른 칸은 그냥 바뀜
+        QTest.mouseClick(vp, Qt.LeftButton, Qt.NoModifier, self._cell(0, 1))
+        QTest.mouseClick(vp, Qt.LeftButton, Qt.NoModifier, self._cell(2, 1))
+        self.assertEqual(cv.source(), CellRect.single(2, 1))
+
+    def test_esc_steps_back_and_ctrl_d_and_empty_click(self):
+        cv, vp = self.cv, self.cv.viewport()
+        cv.set_source(CellRect.single(0, 0))
+        cv.set_target(CellRect.from_cells((1, 0), (1, 2)))
+        cv.setFocus()
+        QTest.keyClick(cv, Qt.Key_Escape)
+        self.assertIsNone(cv.target())
+        self.assertIsNotNone(cv.source())
+        QTest.keyClick(cv, Qt.Key_Escape)
+        self.assertIsNone(cv.source())
+        cv.set_source(CellRect.single(0, 0))
+        cv.set_target(CellRect.single(1, 1))
+        self.win.deselect_all()
+        self.assertIsNone(cv.source())
+        self.assertIsNone(cv.target())
+        self.assertEqual(self.win._last_msg[0], "status.deselected")
+        cv.set_source(CellRect.single(0, 0))
+        ox, oy = cv._origin()
+        QTest.mouseClick(vp, Qt.LeftButton, Qt.NoModifier, QPoint(ox + 300 * cv._scale() + 40, oy + 40))  # 시트 오른쪽 빈 곳
+        self.assertIsNone(cv.source())
+
+
+    def test_ctrl_arrows_move_all_cells(self):
+        w = self.win
+        m = w.model
+        m.arr[10, 10] = (255, 0, 0, 255)  # R1C1
+        m.arr[150, 210] = (0, 255, 0, 255)  # R2C3
+        w.canvas.set_source(CellRect.single(0, 0))
+        w._update_all()
+        w.nudge_all(2, 0)
+        self.assertEqual(int(m.arr[10, 12, 3]), 255)
+        self.assertEqual(int(m.arr[150, 212, 3]), 255)  # 선택 밖 셀도 같이
+        self.assertEqual(int(m.arr[10, 10, 3]), 0)
+        w.undo()
+        self.assertEqual(int(m.arr[10, 10, 3]), 255)
+        keys = {s.toString() for act in w.nudge_all_actions for s in act.shortcuts()}
+        self.assertIn("Ctrl+Up", keys)
+        self.assertIn("Ctrl+Shift+Left", keys)
+
+    def test_wheel_scrolls_and_ctrl_alt_wheel_zooms(self):
+        from PySide6.QtCore import QPointF
+        from PySide6.QtGui import QWheelEvent
+        cv = self.cv
+        cv.set_zoom(800)
+        _app.processEvents()
+
+        def wheel(mods, dy=-120, dx=0):
+            pos = QPointF(200, 200)
+            ev = QWheelEvent(pos, cv.viewport().mapToGlobal(pos.toPoint()), QPoint(0, 0), QPoint(dx, dy),
+                             Qt.NoButton, mods, Qt.NoScrollPhase, False)
+            cv.wheelEvent(ev)
+
+        z0, v0 = cv.zoom(), cv.verticalScrollBar().value()
+        wheel(Qt.NoModifier)
+        self.assertEqual(cv.zoom(), z0)
+        self.assertGreater(cv.verticalScrollBar().value(), v0)
+        h0 = cv.horizontalScrollBar().value()
+        wheel(Qt.ShiftModifier)
+        self.assertGreater(cv.horizontalScrollBar().value(), h0)
+        wheel(Qt.ControlModifier)
+        self.assertLess(cv.zoom(), z0)
+        z1 = cv.zoom()
+        wheel(Qt.AltModifier, dy=0, dx=120)  # Alt 는 가로 휠로 들어옴
+        self.assertGreater(cv.zoom(), z1)
+
+
 if __name__ == "__main__":
     unittest.main()

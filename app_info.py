@@ -2,9 +2,9 @@
 참조하는 단일 소스. 버전을 올릴 때는 여기 값과 CHANGELOG.md를 함께 갱신한다."""
 
 APP_NAME = "SpriteGrid Editor"
-APP_VERSION = "0.4.1"
-APP_VERSION_NAME = "셀 편집 도구 보강"  # 이번 버전의 코드네임 (CHANGELOG의 버전 제목과 맞춤)
-APP_VERSION_NAME_EN = "Cell Editor Tools"
+APP_VERSION = "0.4.2"
+APP_VERSION_NAME = "선택·이동 조작"  # 이번 버전의 코드네임 (CHANGELOG의 버전 제목과 맞춤)
+APP_VERSION_NAME_EN = "Selection & Move Controls"
 
 AUTHOR = "재와니"
 AUTHOR_BLOG_URL = "https://blog.naver.com/akrsodhk"

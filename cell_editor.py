@@ -295,9 +295,23 @@ class CellEditView(QWidget):
         super().leaveEvent(e)
 
     def wheelEvent(self, e) -> None:
-        d = e.angleDelta().y()
-        if d:
+        """(v0.4.2) 휠 = 위아래 이동, Shift+휠 = 좌우 이동, Ctrl+휠 / Alt+휠 = 확대·축소.
+        Alt 를 누르면 Qt가 휠 방향을 가로로 바꿔 보내므로 x·y 중 0이 아닌 값을 쓴다."""
+        mods = e.modifiers()
+        ad = e.angleDelta()
+        d = ad.y() or ad.x()
+        if not d:
+            e.accept()
+            return
+        if mods & (Qt.ControlModifier | Qt.AltModifier):
             self.zoomRequested.emit(1 if d > 0 else -1, e.position().toPoint())
+        else:
+            area = self.parent()
+            while area is not None and not isinstance(area, QScrollArea):
+                area = area.parent()
+            if area is not None:
+                bar = area.horizontalScrollBar() if mods & Qt.ShiftModifier else area.verticalScrollBar()
+                bar.setValue(bar.value() - int(d / 120 * max(20, self.scale * 4)))
         e.accept()
 
 
