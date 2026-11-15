@@ -22,7 +22,7 @@ _app = QApplication.instance() or QApplication([])
 import i18n  # noqa: E402
 import pixel_tools as pt  # noqa: E402
 from autosave import AutoSaver  # noqa: E402
-from cell_editor import PAD, SLOT_COUNT, TOOL_FILL, TOOL_MOVE, TOOL_PAINT, CellEditDialog  # noqa: E402
+from cell_editor import MODE_IMAGE, MODE_MASK, PAD, SLOT_COUNT, TOOL_FILL, TOOL_MOVE, TOOL_PAINT, CellEditDialog  # noqa: E402
 from config_manager import ConfigManager  # noqa: E402
 from main_window import MainWindow  # noqa: E402
 from sheet_model import CellRect  # noqa: E402
@@ -210,6 +210,87 @@ class CellEditorV041Tests(unittest.TestCase):
         QTest.keyClick(dlg, Qt.Key_M)
         self.assertTrue(dlg.view.show_mask)
         dlg.view.repaint()
+
+    def test_image_mode_keeps_existing_mask_index(self):
+        dlg = self.dlg
+        self.assertEqual(dlg.mode, MODE_IMAGE)
+        dlg.select_slot(1)  # 색 칸 2 = 마스크 번호 2
+        x, y = self._doc_xy(30, 30)  # 그림 있음 (번호 1)
+        QTest.mouseClick(dlg.view, Qt.LeftButton, Qt.NoModifier, self._pos(x, y))
+        self.assertEqual(tuple(dlg.doc.arr[y, x, :3]), dlg.colors[1][0])
+        self.assertEqual(int(dlg.doc.mask[y, x]), 1)  # 기존 번호 유지
+        ex, ey = self._doc_xy(90, 10)  # 빈 곳 → 새 픽셀은 색 칸 번호
+        QTest.mouseClick(dlg.view, Qt.LeftButton, Qt.NoModifier, self._pos(ex, ey))
+        self.assertEqual(int(dlg.doc.mask[ey, ex]), 2)
+
+    def test_mask_mode_paints_index_only(self):
+        dlg = self.dlg
+        QTest.keyClick(dlg, Qt.Key_Q)
+        self.assertEqual(dlg.mode, MODE_MASK)
+        self.assertTrue(dlg.view.show_mask)
+        self.assertFalse(dlg.btn_move.isEnabled())
+        QTest.keyClick(dlg, Qt.Key_3)
+        self.assertEqual(dlg.region, 3)
+        before = dlg.doc.arr.copy()
+        x, y = self._doc_xy(30, 30)
+        QTest.mouseClick(dlg.view, Qt.LeftButton, Qt.NoModifier, self._pos(x, y))
+        self.assertEqual(int(dlg.doc.mask[y, x]), 3)
+        ex, ey = self._doc_xy(90, 10)  # 투명 픽셀은 보호
+        QTest.mouseClick(dlg.view, Qt.LeftButton, Qt.NoModifier, self._pos(ex, ey))
+        self.assertEqual(int(dlg.doc.mask[ey, ex]), 0)
+        QTest.mouseClick(dlg.view, Qt.RightButton, Qt.NoModifier, self._pos(x, y))  # 오른쪽 = 번호 0
+        self.assertEqual(int(dlg.doc.mask[y, x]), 0)
+        QTest.keyClick(dlg, Qt.Key_G)
+        QTest.mouseClick(dlg.view, Qt.LeftButton, Qt.NoModifier, self._pos(*self._doc_xy(60, 100)))
+        self.assertEqual(int(dlg.doc.mask[self._doc_xy(60, 100)[1], self._doc_xy(60, 100)[0]]), 3)
+        self.assertTrue(np.array_equal(dlg.doc.arr, before))  # 그림은 그대로
+        # 스포이트 = 영역 번호, X = 직전 영역
+        QTest.keyClick(dlg, Qt.Key_1)
+        dlg._pick_at(*self._doc_xy(60, 100))
+        self.assertEqual(dlg.region, 3)
+        QTest.keyClick(dlg, Qt.Key_X)
+        self.assertEqual(dlg.region, 1)
+        dlg.undo()
+        QTest.keyClick(dlg, Qt.Key_Q)
+        self.assertEqual(dlg.mode, MODE_IMAGE)
+        self.assertTrue(dlg.btn_move.isEnabled())
+
+    def test_main_opens_mask_mode_when_mask_view_on_and_alt_double_click(self):
+        w = self.win
+        self.dlg.history.mark_saved()
+        modes = []
+
+        class Fake:
+            def __init__(self, *a, mode="image", **k):
+                modes.append(mode)
+                self.result_block = None
+                self.changed = False
+
+            def exec(self):
+                return 0
+
+        import main_window as mw_mod
+        orig = mw_mod.CellEditDialog
+        mw_mod.CellEditDialog = Fake
+        try:
+            w.canvas.set_source(CellRect.single(0, 0))
+            self.cfg.set("mask_view.mode", "off")
+            w.open_cell_editor()
+            self.cfg.set("mask_view.mode", "overlay")
+            w.open_cell_editor()
+            self.assertEqual(modes, ["image", "mask"])
+            # 마스크 연필이 켜져 있어도 Alt+더블클릭이면 열림
+            self.cfg.set("mask_view.mode", "off")
+            w._set_paint_tool("pencil")
+            cv = w.canvas
+            ox, oy = cv._origin()
+            s = cv._scale()
+            QTest.mouseDClick(cv.viewport(), Qt.LeftButton, Qt.AltModifier, QPoint(ox + 50 * s, oy + 60 * s))
+            self.assertEqual(modes[-1], "mask")
+            self.assertEqual(len(modes), 3)
+        finally:
+            mw_mod.CellEditDialog = orig
+            w._set_paint_tool(None)
 
 
 class CanvasSelectionTests(unittest.TestCase):

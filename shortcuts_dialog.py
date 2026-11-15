@@ -22,10 +22,12 @@ CANVAS_KEYS = (
     ("keys.canvas_zoom", "keys.m_ctrl_alt_wheel"),
     ("keys.canvas_pan", "keys.m_pan"),
     ("keys.canvas_cell_edit", "keys.m_double"),
+    ("keys.canvas_cell_edit_alt", "keys.m_alt_double"),
     ("keys.canvas_move_keys", "← → ↑ ↓ / Shift"),
     ("keys.canvas_move_esc", "Esc"),
 )
 CELL_EDITOR_KEYS = (
+    ("keys.ce_mode", "Q"),
     ("keys.ce_paint", "B"),
     ("keys.ce_erase", "E"),
     ("keys.ce_right_erase", "keys.m_right"),

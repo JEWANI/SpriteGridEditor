@@ -2166,8 +2166,12 @@ class MainWindow(QMainWindow, Translatable):
         if not m.grid_matches_image():
             self._show_message("status.grid_image_mismatch_hint", {}, "warn")
             return
+        # 마스크를 보고 있거나 마스크 보정 도구가 켜져 있으면 마스크 편집 모드로 연다 (v0.4.2)
+        mask_tools_on = self.canvas.paint_tool() not in (None, TOOL_MOVE)
+        mask_view_on = self.config.get("mask_view.mode", MASK_VIEW_OFF) != MASK_VIEW_OFF
+        mode = "mask" if m.has_mask and (mask_tools_on or mask_view_on) else "image"
         dlg = CellEditDialog(self, m.arr, m.mask if m.has_mask else None, m.grid, src, self._all_refs(),
-                             self.config, self.config.get("app_theme", "dark"))
+                             self.config, self.config.get("app_theme", "dark"), mode=mode)
         self._cell_dialog = dlg  # 테스트에서 접근
         accepted = dlg.exec()
         self._cell_dialog = None

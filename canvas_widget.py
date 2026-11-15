@@ -858,8 +858,11 @@ class CanvasWidget(QAbstractScrollArea):
         self._drag_anchor = None
 
     def mouseDoubleClickEvent(self, event) -> None:
-        if (self._model is None or self._readonly or event.button() != Qt.LeftButton
-                or self._paint_tool is not None):
+        if self._model is None or self._readonly or event.button() != Qt.LeftButton:
+            return
+        # 마스크 보정 도구가 켜져 있어도 Alt+더블클릭이면 셀 편집 창(마스크 모드)을 연다 (v0.4.2)
+        if self._paint_tool is not None and not (self._paint_tool != TOOL_MOVE
+                                                 and event.modifiers() & Qt.AltModifier):
             return
         cell = self.cell_at(event.position().toPoint())
         if cell is not None:

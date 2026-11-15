@@ -152,6 +152,10 @@ Turns a color outfit sheet into a **gray sheet + index mask (`_M`)** for Unity's
 - **Flip (H)**: flips the picture of the cell under the mouse (or the first cell) horizontally, mask included — handy for re-aligning one cell after a mirror.
 - **🎨 Sheet colors**: shows the 16 most-used colors in the edit area; picking one puts it in the current slot (with the mask index used most for that color).
 - **Show mask (M)**: overlays the region pseudo-colors (1 red · 2 blue · 3 green · 4 yellow) on the edit area to check the indices you paint.
+- **Image / mask editing modes** (buttons at the top · `Q`, v0.4.2) — each mode has its own border color (image = blue, mask = orange + banner).
+  - **🖼 Image editing**: only picture colors change; **pixels that already had a picture keep their mask index**. Only newly painted empty (transparent) pixels get the `Index for new pixels` (remembered per slot); erased pixels get 0.
+  - **🎭 Mask editing**: the picture never changes, only **region indices 1-4** are painted — region buttons / keys 1-4, paint, erase (0), fill (connected same index), eyedropper (index); transparent pixels are protected and the overlay is always on. Move and flip are image-mode only.
+  - Opens in **mask mode when the main mask view or a mask brush tool is on**. With a mask brush tool on, open it with **Alt+double-click** (or Ctrl+E).
 - The cursor follows the tool — paint = brush-size square, erase = dashed square, eyedropper = pipette, move = four-way arrow, fill = crosshair. The top line shows tool, size and color; the right side shows the coordinates and color under the mouse.
 - Paint is always opaque (alpha 255); erased pixels become transparent with mask 0. On sheets with a mask, **the eyedropper takes the mask index together with the color** and paints it too (or set `Mask index` directly).
 - Ctrl+Z / Ctrl+Y undo inside the window. **Apply (Ctrl+Enter)** closes it and writes to the sheet — in the main window **one undo** reverts everything done in the editor. `Cancel` / Esc discards (asks if anything changed).

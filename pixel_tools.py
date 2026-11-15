@@ -55,8 +55,13 @@ def clip_bounds(bounds: Bounds, shape: tuple[int, ...]) -> Bounds:
 #  칠하기 / 지우기 / 스포이트                                                  #
 # --------------------------------------------------------------------------- #
 def paint_stamp(arr: np.ndarray, mask: np.ndarray | None, x: int, y: int, size: int,
-                rgb: tuple[int, int, int], index: int | None, bounds: Bounds) -> DirtyRect | None:
-    """(x, y) 중심 size×size 브러시로 rgb(알파 255)를 칠한다. index가 있으면 마스크에도 기록."""
+                rgb: tuple[int, int, int], index: int | None, bounds: Bounds,
+                new_only: bool = False) -> DirtyRect | None:
+    """(x, y) 중심 size×size 브러시로 rgb(알파 255)를 칠한다. index가 있으면 마스크에도 기록.
+
+    new_only=True(셀 편집 창 이미지 모드, v0.4.2): 마스크 번호는 **투명이던 픽셀에만** 기록하고
+    이미 그림이 있던 픽셀의 번호는 그대로 둔다 (그림 색을 고쳐도 마스크가 바뀌지 않게).
+    """
     box = _brush_box(x, y, size, clip_bounds(bounds, arr.shape))
     if box is None:
         return None
@@ -65,14 +70,16 @@ def paint_stamp(arr: np.ndarray, mask: np.ndarray | None, x: int, y: int, size: 
     view = arr[y0:y1, x0:x1]
     changed = (view != color).any(axis=-1)
     mview = None
+    sel = None
     if mask is not None and index is not None:
         mview = mask[y0:y1, x0:x1]
-        changed |= mview != index
+        sel = (view[..., 3] == 0) if new_only else np.ones(view.shape[:2], dtype=bool)
+        changed |= sel & (mview != index)
     if not changed.any():
         return None
     view[...] = color
     if mview is not None:
-        mview[...] = index
+        mview[sel] = index
     return box
 
 
@@ -93,10 +100,10 @@ def erase_stamp(arr: np.ndarray, mask: np.ndarray | None, x: int, y: int, size: 
     return box
 
 
-def paint_line(arr, mask, p0, p1, size, rgb, index, bounds) -> DirtyRect | None:
+def paint_line(arr, mask, p0, p1, size, rgb, index, bounds, new_only: bool = False) -> DirtyRect | None:
     dirty = None
     for x, y in line_points(p0[0], p0[1], p1[0], p1[1]):
-        dirty = _union(dirty, paint_stamp(arr, mask, x, y, size, rgb, index, bounds))
+        dirty = _union(dirty, paint_stamp(arr, mask, x, y, size, rgb, index, bounds, new_only))
     return dirty
 
 
@@ -265,8 +272,9 @@ def same_color_region(arr: np.ndarray, x: int, y: int, bounds: Bounds) -> np.nda
 
 
 def fill_region(arr: np.ndarray, mask: np.ndarray | None, x: int, y: int, rgb, index: int | None,
-                bounds: Bounds, erase: bool = False) -> DirtyRect | None:
-    """채우기: 이어진 같은 색 영역을 rgb(알파 255)로 — erase=True면 투명 + 마스크 0. 바뀐 사각형."""
+                bounds: Bounds, erase: bool = False, new_only: bool = False) -> DirtyRect | None:
+    """채우기: 이어진 같은 색 영역을 rgb(알파 255)로 — erase=True면 투명 + 마스크 0. 바뀐 사각형.
+    new_only=True면 마스크 번호는 투명이던 픽셀에만 (paint_stamp 와 같음)."""
     sel = same_color_region(arr, x, y, bounds)
     if sel is None or not sel.any():
         return None
@@ -277,9 +285,10 @@ def fill_region(arr: np.ndarray, mask: np.ndarray | None, x: int, y: int, rgb, i
         if mask is not None:
             mask[sel] = 0
     else:
+        was_clear = sel & (arr[..., 3] == 0)
         arr[sel] = (*rgb, 255)
         if mask is not None and index is not None:
-            mask[sel] = index
+            mask[was_clear if new_only else sel] = index
     if np.array_equal(before, arr[sel]) and (mask is None or np.array_equal(mbefore, mask[sel])):
         return None
     ys, xs = np.nonzero(sel)
