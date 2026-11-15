@@ -143,7 +143,11 @@ Turns a color outfit sheet into a **gray sheet + index mask (`_M`)** for Unity's
 - **Left mouse = paint, right mouse = erase** (no tool switch needed). **Shift+click** draws a straight line from the last painted point.
 - **Five color slots** (second row): pick with keys **1-5**, `X` returns to the previous slot, click the active slot again to choose its color. The eyedropper fills the current slot (color and mask index). Slots are remembered.
 - **Move (V)**: drag a cell to move its picture — arrows 1px / Shift+arrows 5px (cell under the mouse). Parts pushed past the cell edge are clipped; the mask moves too.
-- The cursor follows the tool — paint = brush-size square, erase = dashed square, eyedropper = pipette, move = four-way arrow. The top line shows tool, size and color; the right side shows the coordinates and color under the mouse.
+- **Fill (G)**: fills the connected **same-color** area with the current slot color (and mask index) — right button makes it transparent. Never spreads past the thick border.
+- **Flip (H)**: flips the picture of the cell under the mouse (or the first cell) horizontally, mask included — handy for re-aligning one cell after a mirror.
+- **🎨 Sheet colors**: shows the 16 most-used colors in the edit area; picking one puts it in the current slot (with the mask index used most for that color).
+- **Show mask (M)**: overlays the region pseudo-colors (1 red · 2 blue · 3 green · 4 yellow) on the edit area to check the indices you paint.
+- The cursor follows the tool — paint = brush-size square, erase = dashed square, eyedropper = pipette, move = four-way arrow, fill = crosshair. The top line shows tool, size and color; the right side shows the coordinates and color under the mouse.
 - Paint is always opaque (alpha 255); erased pixels become transparent with mask 0. On sheets with a mask, **the eyedropper takes the mask index together with the color** and paints it too (or set `Mask index` directly).
 - Ctrl+Z / Ctrl+Y undo inside the window. **Apply (Ctrl+Enter)** closes it and writes to the sheet — in the main window **one undo** reverts everything done in the editor. `Cancel` / Esc discards (asks if anything changed).
 

@@ -22,7 +22,7 @@ _app = QApplication.instance() or QApplication([])
 import i18n  # noqa: E402
 import pixel_tools as pt  # noqa: E402
 from autosave import AutoSaver  # noqa: E402
-from cell_editor import PAD, SLOT_COUNT, TOOL_MOVE, TOOL_PAINT, CellEditDialog  # noqa: E402
+from cell_editor import PAD, SLOT_COUNT, TOOL_FILL, TOOL_MOVE, TOOL_PAINT, CellEditDialog  # noqa: E402
 from config_manager import ConfigManager  # noqa: E402
 from main_window import MainWindow  # noqa: E402
 from sheet_model import CellRect  # noqa: E402
@@ -39,6 +39,34 @@ class ShiftBlockTests(unittest.TestCase):
         self.assertEqual(int(mo[1, 2]), 2)
         self.assertFalse(o[0, 0].any())
         self.assertFalse(pt.shift_block(b, None, -1, 0)[0].any())  # 칸 밖으로 → 버림
+
+
+class FillPaletteTests(unittest.TestCase):
+    def test_fill_same_color_region_and_erase(self):
+        a = np.zeros((10, 10, 4), np.uint8)
+        a[2:5, 2:5] = (10, 20, 30, 255)
+        a[3, 3] = (1, 1, 1, 255)
+        m = np.zeros((10, 10), np.uint8)
+        m[2:5, 2:5] = 2
+        self.assertEqual(pt.fill_region(a, m, 2, 2, (200, 0, 0), 3, (0, 10, 0, 10)), (2, 5, 2, 5))
+        self.assertEqual(tuple(a[2, 2]), (200, 0, 0, 255))
+        self.assertEqual(tuple(a[3, 3]), (1, 1, 1, 255))  # 다른 색은 그대로
+        self.assertEqual((int(m[2, 2]), int(m[3, 3])), (3, 2))
+        pt.fill_region(a, m, 2, 2, (0, 0, 0), None, (0, 10, 0, 10), erase=True)
+        self.assertEqual(int(a[2, 2, 3]), 0)
+        self.assertEqual(int(m[2, 2]), 0)
+        # 범위 밖으로 번지지 않음
+        pt.fill_region(a, m, 0, 0, (9, 9, 9), 1, (0, 10, 0, 5))
+        self.assertEqual(int(a[0, 6, 3]), 0)
+
+    def test_palette_most_used_first_with_index(self):
+        a = np.zeros((4, 4, 4), np.uint8)
+        a[0, :] = (5, 5, 5, 255)
+        a[1, 0] = (7, 7, 7, 255)
+        m = np.zeros((4, 4), np.uint8)
+        m[0, :] = 2
+        self.assertEqual(pt.palette(a, m, (0, 4, 0, 4)), [((5, 5, 5), 2, 4), ((7, 7, 7), 0, 1)])
+        self.assertEqual(pt.palette(a, None, (2, 4, 0, 4)), [])
 
 
 class QtTranslationTests(unittest.TestCase):
@@ -153,6 +181,35 @@ class CellEditorV041Tests(unittest.TestCase):
         QTest.mouseClick(dlg.view, Qt.LeftButton, Qt.ShiftModifier, self._pos(*b))
         row = dlg.doc.arr[a[1], a[0]:b[0] + 1, 3]
         self.assertTrue((row == 255).all())
+
+    def test_fill_tool_flip_and_palette(self):
+        dlg = self.dlg
+        QTest.keyClick(dlg, Qt.Key_G)
+        self.assertEqual(dlg.tool, TOOL_FILL)
+        x, y = self._doc_xy(30, 30)
+        QTest.mouseClick(dlg.view, Qt.LeftButton, Qt.NoModifier, self._pos(x, y))
+        self.assertEqual(tuple(dlg.doc.arr[y + 50, x + 40, :3]), dlg.colors[0][0])  # 이어진 회색 전부
+        QTest.mouseClick(dlg.view, Qt.RightButton, Qt.NoModifier, self._pos(x, y))
+        self.assertEqual(int(dlg.doc.arr[y + 50, x + 40, 3]), 0)
+        dlg.undo()
+        # H: 마우스가 있는 칸 좌우 반전 (그림은 x 20~79 → 20~79 그대로 대칭이므로 한쪽만 칠해 확인)
+        QTest.keyClick(dlg, Qt.Key_B)
+        QTest.mouseClick(dlg.view, Qt.LeftButton, Qt.NoModifier, self._pos(*self._doc_xy(5, 5)))
+        dlg.view.hover = self._doc_xy(5, 5)
+        QTest.keyClick(dlg, Qt.Key_H)
+        fx, fy = self._doc_xy(94, 5)
+        self.assertEqual(int(dlg.doc.arr[fy, fx, 3]), 255)
+        self.assertEqual(int(dlg.doc.arr[self._doc_xy(5, 5)[1], self._doc_xy(5, 5)[0], 3]), 0)
+        # 시트 색 → 지금 색 칸
+        cols = dlg.palette_colors()
+        self.assertTrue(cols)
+        dlg.select_slot(3)
+        dlg.set_slot_color(cols[0][0], cols[0][1])
+        self.assertEqual(dlg.colors[3][0], cols[0][0])
+        # 마스크 보기 토글
+        QTest.keyClick(dlg, Qt.Key_M)
+        self.assertTrue(dlg.view.show_mask)
+        dlg.view.repaint()
 
 
 if __name__ == "__main__":

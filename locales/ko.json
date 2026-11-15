@@ -497,7 +497,7 @@
   "dlg.celledit.state_name_erase": "지우기",
   "dlg.celledit.state_index": " · 마스크 {index}",
   "dlg.celledit.hover": "x {x}, y {y} · {color} · 알파 {a}",
-  "dlg.celledit.hint": "왼쪽 = 칠하기 · 오른쪽 = 지우기 · B 칠하기 · E 지우기 · I 스포이트 · V 이동 · Alt 누르는 동안 스포이트 · 1~5 색 칸 (X 직전 칸) · [ ] 브러시 크기 · Shift+클릭 직선 · 휠 확대. 굵은 테두리 안만 편집되고, 바깥 이웃 셀은 보기 전용입니다. 칠하기는 불투명(알파 255), 지운 곳은 마스크 0. 적용(Ctrl+Enter)하면 메인에서 실행 취소 한 번에 되돌릴 수 있습니다.",
+  "dlg.celledit.hint": "왼쪽 = 칠하기 · 오른쪽 = 지우기 · B 칠하기 · E 지우기 · I 스포이트 · G 채우기 · V 이동 · H 좌우 반전 · M 마스크 보기 · Alt 누르는 동안 스포이트 · 1~5 색 칸 (X 직전 칸) · [ ] 브러시 크기 · Shift+클릭 직선 · 휠 확대. 굵은 테두리 안만 편집되고, 바깥 이웃 셀은 보기 전용입니다. 적용(Ctrl+Enter)하면 메인에서 실행 취소 한 번에 되돌릴 수 있습니다.",
   "dlg.celledit.apply": "적용",
   "dlg.celledit.discard_title": "셀 편집 취소",
   "dlg.celledit.discard_msg": "바뀐 내용을 버리고 닫을까요?",
@@ -600,5 +600,18 @@
   "keys.ce_slots": "색 칸 1~5 고르기",
   "keys.m_right": "마우스 오른쪽",
   "keys.m_shift_click": "Shift + 클릭",
-  "dlg.celledit.slots": "색 칸:"
+  "dlg.celledit.slots": "색 칸:",
+  "dlg.celledit.tool_fill": "🪣 채우기 (G)",
+  "dlg.celledit.state_fill": "🪣 채우기 · 색 {slot} {color} — 이어진 같은 색 영역 (오른쪽 버튼 = 투명으로)",
+  "dlg.celledit.palette": "🎨 시트 색",
+  "dlg.celledit.palette_tip": "편집 범위에서 많이 쓴 색 16개 — 고르면 지금 색 칸에 들어갑니다 (마스크 번호 포함)",
+  "dlg.celledit.palette_empty": "(불투명 픽셀 없음)",
+  "dlg.celledit.flip": "⇋ 좌우 반전 (H)",
+  "dlg.celledit.flip_tip": "마우스가 있는 칸(없으면 첫 칸)의 그림을 좌우로 뒤집습니다 (마스크 포함)",
+  "dlg.celledit.show_mask": "마스크 보기 (M)",
+  "edit.cell_fill": "채우기",
+  "edit.cell_flip": "칸 좌우 반전",
+  "keys.ce_fill": "채우기 (오른쪽 버튼 = 투명으로)",
+  "keys.ce_flip": "마우스가 있는 칸 좌우 반전",
+  "keys.ce_mask": "마스크 보기 켜기/끄기"
 }

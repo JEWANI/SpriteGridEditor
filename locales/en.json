@@ -497,7 +497,7 @@
   "dlg.celledit.state_name_erase": "Erase",
   "dlg.celledit.state_index": " · mask {index}",
   "dlg.celledit.hover": "x {x}, y {y} · {color} · alpha {a}",
-  "dlg.celledit.hint": "Left = paint · right = erase · B paint · E erase · I eyedropper · V move · hold Alt for eyedropper · 1-5 color slots (X previous slot) · [ ] brush size · Shift+click straight line · wheel zoom. Only the area inside the thick border is edited; neighbor cells are view-only. Paint is opaque (alpha 255); erased pixels get mask 0. Apply (Ctrl+Enter) is a single undo step in the main window.",
+  "dlg.celledit.hint": "Left = paint · right = erase · B paint · E erase · I eyedropper · G fill · V move · H flip · M mask view · hold Alt for eyedropper · 1-5 color slots (X previous) · [ ] brush size · Shift+click straight line · wheel zoom. Only the area inside the thick border is edited; neighbor cells are view-only. Apply (Ctrl+Enter) is a single undo step in the main window.",
   "dlg.celledit.apply": "Apply",
   "dlg.celledit.discard_title": "Cancel Cell Edit",
   "dlg.celledit.discard_msg": "Discard your changes and close?",
@@ -600,5 +600,18 @@
   "keys.ce_slots": "Pick color slot 1-5",
   "keys.m_right": "Right mouse button",
   "keys.m_shift_click": "Shift + Click",
-  "dlg.celledit.slots": "Colors:"
+  "dlg.celledit.slots": "Colors:",
+  "dlg.celledit.tool_fill": "🪣 Fill (G)",
+  "dlg.celledit.state_fill": "🪣 Fill · slot {slot} {color} — connected same-color area (right button = to transparent)",
+  "dlg.celledit.palette": "🎨 Sheet colors",
+  "dlg.celledit.palette_tip": "The 16 most-used colors in the edit area — pick one to put it in the current slot (with mask index)",
+  "dlg.celledit.palette_empty": "(no opaque pixels)",
+  "dlg.celledit.flip": "⇋ Flip (H)",
+  "dlg.celledit.flip_tip": "Flip the picture of the cell under the mouse (or the first cell) horizontally, mask included",
+  "dlg.celledit.show_mask": "Show mask (M)",
+  "edit.cell_fill": "Fill",
+  "edit.cell_flip": "Flip cell",
+  "keys.ce_fill": "Fill (right button = to transparent)",
+  "keys.ce_flip": "Flip the cell under the mouse",
+  "keys.ce_mask": "Toggle mask view"
 }

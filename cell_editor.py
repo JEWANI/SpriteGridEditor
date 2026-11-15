@@ -10,6 +10,8 @@ cell_editor.py
 - (v0.4.1) **마우스 왼쪽 = 칠하기, 오른쪽 = 지우기**, Shift+클릭 = 직전 지점에서 직선,
   **이동 도구 V**(누른 칸의 그림을 끌어 옮기기 · 방향키 1px/Shift 5px, 칸 밖은 잘림),
   **색 칸 5개** — 숫자 1~5로 바꾸고 `X`는 직전 색 칸으로, 색 칸을 한 번 더 누르면 색 선택.
+  **채우기 G**(이어진 같은 색 — 오른쪽 버튼은 투명으로), **좌우 반전 H**(마우스가 있는 칸),
+  **시트 색** 팔레트(많이 쓴 색 → 지금 색 칸), **마스크 보기 M**(영역 의사색 오버레이).
 - 커서 모양(브러시 크기 사각형 / 점선 사각형 / 스포이트) + 위쪽 상태 표시(도구·크기·색, 마우스 아래 좌표·색).
 - 스포이트는 색과 **마스크 인덱스를 함께** 가져와 칠할 때 같이 기록한다. 칠하기는 알파 255, 지우면 인덱스 0.
 - `적용`(Ctrl+Enter)이면 결과 블록을 돌려주고 닫는다 → 메인 실행 취소에서는 한 단계.
@@ -24,13 +26,14 @@ import math
 import numpy as np
 from PySide6.QtCore import QPoint, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import (
-    QBrush, QColor, QCursor, QImage, QKeySequence, QPainter, QPen, QPixmap, QPolygon, QShortcut,
+    QBrush, QColor, QCursor, QIcon, QImage, QKeySequence, QPainter, QPen, QPixmap, QPolygon, QShortcut,
 )
 from PySide6.QtWidgets import (
-    QCheckBox, QColorDialog, QComboBox, QDialog, QHBoxLayout, QLabel, QMessageBox,
+    QCheckBox, QColorDialog, QComboBox, QDialog, QHBoxLayout, QLabel, QMenu, QMessageBox,
     QPushButton, QScrollArea, QSpinBox, QToolButton, QVBoxLayout, QWidget,
 )
 
+import mask_convert as mc
 import pixel_tools as pt
 from canvas_widget import numpy_to_qimage
 from config_manager import ConfigManager
@@ -44,6 +47,7 @@ TOOL_PAINT = "paint"
 TOOL_ERASE = "erase"
 TOOL_PICK = "pick"
 TOOL_MOVE = "move"
+TOOL_FILL = "fill"
 SLOT_COUNT = 5
 # 기본 색 칸 (rgb, 마스크 번호) — 마스크가 없는 시트에서는 번호를 쓰지 않는다
 DEFAULT_SLOTS = [("#3B4C75", 1), ("#FFFFFF", 2), ("#1F1F24", 3), ("#808080", 4), ("#B8322E", 1)]
@@ -123,6 +127,7 @@ class CellEditView(QWidget):
         self.neighbor_opacity = 40
         self.brush = 1
         self.tool = TOOL_PAINT
+        self.show_mask = False  # 마스크 영역 의사색 오버레이 (v0.4.1)
         self.hover: tuple[int, int] | None = None
         self._image = numpy_to_qimage(doc.arr)
         self._drag = False
@@ -199,6 +204,14 @@ class CellEditView(QWidget):
         p.restore()
         for img, op, _a in above:
             self._draw_layer(p, img, op / 100.0, full, edit_rect)
+        if self.show_mask and self.doc.has_mask:
+            ey0_, ey1_, ex0_, ex1_ = self.edit_box
+            sub = self.doc.arr[ey0_:ey1_, ex0_:ex1_]
+            over = mc.pseudo_color(self.doc.mask[ey0_:ey1_, ex0_:ex1_], sub[..., 3] > 0)
+            p.save()
+            p.setOpacity(0.55)
+            p.drawImage(edit_rect, numpy_to_qimage(over))
+            p.restore()
         # 픽셀 격자 (확대가 클 때)
         if s >= 6:
             pen = QPen(QColor(255, 255, 255, 28), 1)
@@ -226,7 +239,7 @@ class CellEditView(QWidget):
         p.setBrush(Qt.NoBrush)
         p.drawRect(edit_rect.adjusted(-1, -1, 0, 0))
         # 브러시 미리보기 (칠해질 픽셀 범위)
-        if self.hover is not None and self.tool not in (TOOL_PICK, TOOL_MOVE):
+        if self.hover is not None and self.tool not in (TOOL_PICK, TOOL_MOVE, TOOL_FILL):
             x, y = self.hover
             half = self.brush // 2
             pen = QPen(QColor(colors["target"]), 1, Qt.DashLine if self.tool == TOOL_ERASE else Qt.SolidLine)
@@ -372,7 +385,8 @@ class CellEditDialog(QDialog):
         self.btn_erase = self._tool_button("dlg.celledit.tool_erase", TOOL_ERASE)
         self.btn_pick = self._tool_button("dlg.celledit.tool_pick", TOOL_PICK)
         self.btn_move = self._tool_button("dlg.celledit.tool_move", TOOL_MOVE)
-        for b in (self.btn_paint, self.btn_erase, self.btn_pick, self.btn_move):
+        self.btn_fill = self._tool_button("dlg.celledit.tool_fill", TOOL_FILL)
+        for b in (self.btn_paint, self.btn_erase, self.btn_pick, self.btn_fill, self.btn_move):
             bar.addWidget(b)
         bar.addSpacing(12)
         bar.addWidget(QLabel(tr("dlg.celledit.brush")))
@@ -400,10 +414,27 @@ class CellEditDialog(QDialog):
         for n in range(5):
             self.cb_index.addItem(tr(f"mask.idx{n}"), n)
         self.cb_index.activated.connect(self._on_index)
+        self.btn_palette = QPushButton(tr("dlg.celledit.palette"))
+        self.btn_palette.setFocusPolicy(Qt.NoFocus)
+        self.btn_palette.setAutoDefault(False)
+        self.btn_palette.setToolTip(tr("dlg.celledit.palette_tip"))
+        self.btn_palette.clicked.connect(self._show_palette)
+        bar2.addWidget(self.btn_palette)
         bar2.addSpacing(12)
         bar2.addWidget(self.lb_index)
         bar2.addWidget(self.cb_index)
         bar2.addStretch(1)
+        self.btn_flip = QPushButton(tr("dlg.celledit.flip"))
+        self.btn_flip.setFocusPolicy(Qt.NoFocus)
+        self.btn_flip.setAutoDefault(False)
+        self.btn_flip.setToolTip(tr("dlg.celledit.flip_tip"))
+        self.btn_flip.clicked.connect(self.flip_cell)
+        bar2.addWidget(self.btn_flip)
+        self.chk_mask = QCheckBox(tr("dlg.celledit.show_mask"))
+        self.chk_mask.setFocusPolicy(Qt.NoFocus)
+        self.chk_mask.setVisible(self.doc.has_mask)
+        self.chk_mask.toggled.connect(self._on_show_mask)
+        bar2.addWidget(self.chk_mask)
         self.lb_index.setVisible(self.doc.has_mask)
         self.cb_index.setVisible(self.doc.has_mask)
         bar.addStretch(1)
@@ -467,6 +498,8 @@ class CellEditDialog(QDialog):
         # 창 안에서만 동작하는 단축키
         keys = [("B", lambda: self._set_tool(TOOL_PAINT)), ("E", lambda: self._set_tool(TOOL_ERASE)),
                 ("I", lambda: self._set_tool(TOOL_PICK)), ("V", lambda: self._set_tool(TOOL_MOVE)),
+                ("G", lambda: self._set_tool(TOOL_FILL)), ("H", self.flip_cell),
+                ("M", lambda: self.chk_mask.setChecked(not self.chk_mask.isChecked()) if self.doc.has_mask else None),
                 ("X", self._swap_colors)]
         keys += [(str(i + 1), lambda i=i: self.select_slot(i)) for i in range(SLOT_COUNT)]
         for d, (dx, dy) in (("Left", (-1, 0)), ("Right", (1, 0)), ("Up", (0, -1)), ("Down", (0, 1))):
@@ -495,6 +528,7 @@ class CellEditDialog(QDialog):
         self.btn_erase.setChecked(tool == TOOL_ERASE)
         self.btn_pick.setChecked(tool == TOOL_PICK)
         self.btn_move.setChecked(tool == TOOL_MOVE)
+        self.btn_fill.setChecked(tool == TOOL_FILL)
         self._refresh_tool_state()
 
     def _refresh_tool_state(self) -> None:
@@ -505,12 +539,16 @@ class CellEditDialog(QDialog):
             self.view.setCursor(make_pick_cursor())
         elif tool == TOOL_MOVE:
             self.view.setCursor(Qt.SizeAllCursor)
+        elif tool == TOOL_FILL:
+            self.view.setCursor(Qt.CrossCursor)
         else:
             self.view.setCursor(make_square_cursor(self.view.brush * self.view.scale, tool == TOOL_ERASE))
         rgb, idx = self.colors[self.slot]
         hexc = "#%02X%02X%02X" % rgb
         if tool == TOOL_MOVE:
             text = tr("dlg.celledit.state_move")
+        elif tool == TOOL_FILL:
+            text = tr("dlg.celledit.state_fill", color=hexc, slot=self.slot + 1)
         elif tool == TOOL_PICK:
             key = "dlg.celledit.state_pick_temp" if self.tool != TOOL_PICK else "dlg.celledit.state_pick"
             text = tr(key, back=tr(f"dlg.celledit.state_name_{self.tool}"))
@@ -687,6 +725,13 @@ class CellEditDialog(QDialog):
                             "block": self.doc.arr[y0:y1, x0:x1].copy(),
                             "mblock": self.doc.mask[y0:y1, x0:x1].copy() if self.doc.has_mask else None}
             return
+        if tool == TOOL_FILL:
+            rec = pt.PixelRecorder(self.doc)
+            rgb, idx = self.colors[self.slot]
+            rec.add(pt.fill_region(self.doc.arr, self._mask(), x, y, rgb, idx, self._bounds(), erase=right))
+            self._stroke = {"tool": TOOL_FILL, "rec": rec}
+            self.view.update()
+            return
         if right:
             tool = TOOL_ERASE  # 오른쪽 버튼 = 지우기
         rec = pt.PixelRecorder(self.doc)
@@ -718,6 +763,8 @@ class CellEditDialog(QDialog):
         if st["tool"] == TOOL_MOVE:
             self._move_preview(x - st["start"][0], y - st["start"][1])
             return
+        if st["tool"] == TOOL_FILL:
+            return
         self._apply_segment(st["last"], (x, y))
 
     def cell_box_at(self, x: int, y: int) -> tuple[int, int, int, int] | None:
@@ -740,6 +787,55 @@ class CellEditDialog(QDialog):
         st["rec"].add(st["box"])
         self.view.update()
 
+    def _target_cell(self) -> tuple[int, int, int, int]:
+        """마우스가 있는 칸, 없으면 편집 범위 첫 칸."""
+        if self.view.hover and self.cell_box_at(*self.view.hover):
+            return self.cell_box_at(*self.view.hover)
+        return self.cell_box_at(self.edit_box[2], self.edit_box[0])
+
+    def flip_cell(self) -> None:
+        """H: 마우스가 있는 칸의 그림을 좌우 반전 (마스크도 같이) — 실행 취소 한 단계."""
+        if self._stroke is not None:
+            return
+        y0, y1, x0, x1 = self._target_cell()
+        rec = pt.PixelRecorder(self.doc)
+        self.doc.arr[y0:y1, x0:x1] = self.doc.arr[y0:y1, x0:x1][:, ::-1].copy()
+        if self.doc.has_mask:
+            self.doc.mask[y0:y1, x0:x1] = self.doc.mask[y0:y1, x0:x1][:, ::-1].copy()
+        rec.add((y0, y1, x0, x1))
+        edit = rec.finish("edit.cell_flip")
+        if edit is not None:
+            self.history.do(self.doc, edit)
+            self.changed = True
+        self.view.update()
+        self._update_undo_buttons()
+
+    def palette_colors(self) -> list:
+        """편집 범위에서 많이 쓴 색 (최대 16)."""
+        return pt.palette(self.doc.arr, self._mask(), self.edit_box, 16)
+
+    def set_slot_color(self, rgb, idx) -> None:
+        self.colors[self.slot] = (tuple(rgb), idx if self.doc.has_mask else None)
+        self._save_slots()
+        self._refresh_colors()
+
+    def _show_palette(self) -> None:
+        menu = QMenu(self)
+        cols = self.palette_colors()
+        if not cols:
+            menu.addAction(tr("dlg.celledit.palette_empty")).setEnabled(False)
+        for rgb, idx, n in cols:
+            pm = QPixmap(16, 16)
+            pm.fill(QColor(*rgb))
+            text = "#%02X%02X%02X" % rgb + (f"  · {tr(f'mask.idx{idx}')}" if idx is not None else "") + f"  ({n})"
+            act = menu.addAction(QIcon(pm), text)
+            act.triggered.connect(lambda _c=False, rgb=rgb, idx=idx: self.set_slot_color(rgb, idx))
+        menu.exec(self.btn_palette.mapToGlobal(self.btn_palette.rect().bottomLeft()))
+
+    def _on_show_mask(self, on: bool) -> None:
+        self.view.show_mask = bool(on)
+        self.view.update()
+
     def nudge(self, dx: int, dy: int) -> None:
         """방향키: 이동 도구일 때 마우스가 있는 칸(없으면 편집 범위 첫 칸)을 dx, dy 만큼."""
         if self.tool != TOOL_MOVE or self._stroke is not None:
@@ -758,7 +854,7 @@ class CellEditDialog(QDialog):
         if st is None or st["tool"] == TOOL_PICK:
             self._refresh_tool_state()
             return
-        edit = st["rec"].finish("edit.cell_move" if st["tool"] == TOOL_MOVE else "edit.cell_edit")
+        edit = st["rec"].finish({TOOL_MOVE: "edit.cell_move", TOOL_FILL: "edit.cell_fill"}.get(st["tool"], "edit.cell_edit"))
         if edit is not None:
             # 이미 작업 문서에 반영돼 있으므로 기록만 남긴다 (History.do는 다시 적용해도 같은 값)
             self.history.do(self.doc, edit)

@@ -225,3 +225,86 @@ def shift_block(block: np.ndarray, mblock: np.ndarray | None, dx: int, dy: int
         if mout is not None:
             mout[sy0 + dy:sy1 + dy, sx0 + dx:sx1 + dx] = mblock[sy0:sy1, sx0:sx1]
     return out, mout
+
+
+# --------------------------------------------------------------------------- #
+#  셀 편집 창: 채우기 / 색 팔레트 (v0.4.1)                                     #
+# --------------------------------------------------------------------------- #
+def same_color_region(arr: np.ndarray, x: int, y: int, bounds: Bounds) -> np.ndarray | None:
+    """(x, y)와 4방향으로 이어진 **같은 RGBA**(투명끼리는 RGB 무시) 픽셀 → 시트 크기 bool 배열. 범위 밖이면 None."""
+    by0, by1, bx0, bx1 = clip_bounds(bounds, arr.shape)
+    if not (by0 <= y < by1 and bx0 <= x < bx1):
+        return None
+    sub = arr[by0:by1, bx0:bx1]
+    key = sub.view(np.uint32).reshape(sub.shape[:2]).copy()
+    key[sub[..., 3] == 0] = 0  # 투명 픽셀은 RGB와 상관없이 같은 것으로
+    target = key[y - by0, x - bx0]
+    same = key == target
+    h, w = same.shape
+    seen = np.zeros_like(same)
+    stack = [(y - by0, x - bx0)]
+    while stack:
+        cy, cx = stack.pop()
+        if seen[cy, cx] or not same[cy, cx]:
+            continue
+        xl = cx
+        while xl > 0 and same[cy, xl - 1] and not seen[cy, xl - 1]:
+            xl -= 1
+        xr = cx
+        while xr < w - 1 and same[cy, xr + 1] and not seen[cy, xr + 1]:
+            xr += 1
+        seen[cy, xl:xr + 1] = True
+        for ny in (cy - 1, cy + 1):
+            if 0 <= ny < h:
+                row = same[ny, xl:xr + 1] & ~seen[ny, xl:xr + 1]
+                starts = np.flatnonzero(row & ~np.concatenate(([False], row[:-1])))
+                stack.extend((ny, xl + int(s)) for s in starts)
+    out = np.zeros(arr.shape[:2], dtype=bool)
+    out[by0:by1, bx0:bx1] = seen
+    return out
+
+
+def fill_region(arr: np.ndarray, mask: np.ndarray | None, x: int, y: int, rgb, index: int | None,
+                bounds: Bounds, erase: bool = False) -> DirtyRect | None:
+    """채우기: 이어진 같은 색 영역을 rgb(알파 255)로 — erase=True면 투명 + 마스크 0. 바뀐 사각형."""
+    sel = same_color_region(arr, x, y, bounds)
+    if sel is None or not sel.any():
+        return None
+    before = arr[sel].copy()
+    mbefore = mask[sel].copy() if mask is not None else None
+    if erase:
+        arr[sel] = 0
+        if mask is not None:
+            mask[sel] = 0
+    else:
+        arr[sel] = (*rgb, 255)
+        if mask is not None and index is not None:
+            mask[sel] = index
+    if np.array_equal(before, arr[sel]) and (mask is None or np.array_equal(mbefore, mask[sel])):
+        return None
+    ys, xs = np.nonzero(sel)
+    return int(ys.min()), int(ys.max()) + 1, int(xs.min()), int(xs.max()) + 1
+
+
+def palette(arr: np.ndarray, mask: np.ndarray | None, bounds: Bounds, limit: int = 16
+            ) -> list[tuple[tuple[int, int, int], int | None, int]]:
+    """범위 안 불투명 픽셀의 색을 많이 쓴 순서로 — (rgb, 가장 많이 쓰인 마스크 번호 또는 None, 픽셀 수)."""
+    y0, y1, x0, x1 = clip_bounds(bounds, arr.shape)
+    sub = arr[y0:y1, x0:x1]
+    op = sub[..., 3] > 0
+    if not op.any():
+        return []
+    rgb = sub[..., :3][op]
+    packed = (rgb[:, 0].astype(np.uint32) << 16) | (rgb[:, 1].astype(np.uint32) << 8) | rgb[:, 2]
+    uniq, inverse, counts = np.unique(packed, return_inverse=True, return_counts=True)
+    order = np.argsort(-counts, kind="stable")[:limit]
+    midx = mask[y0:y1, x0:x1][op] if mask is not None else None
+    out = []
+    for u in order:
+        c = int(uniq[u])
+        idx = None
+        if midx is not None:
+            vals = midx[inverse == u]
+            idx = int(np.bincount(vals, minlength=5).argmax())
+        out.append((((c >> 16) & 255, (c >> 8) & 255, c & 255), idx, int(counts[u])))
+    return out
